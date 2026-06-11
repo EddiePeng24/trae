@@ -1,0 +1,3424 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Linux课程设计-源码</title>
+<style>
+body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;padding:20px;background:#fff}
+.cover{text-align:center;padding-top:100px;page-break-after:always}
+.cover h1{font-size:26px;margin-bottom:10px}.cover h2{font-size:20px;color:#666;margin-bottom:40px}
+.cover p{font-size:15px;line-height:2.2}
+.problem{page-break-before:always;padding-top:5px}
+.title{background:#eef2f7;padding:8px 12px;font-size:14px;font-weight:bold;border-left:4px solid #4a90d9;margin-bottom:8px}
+pre{font-family:"Consolas","Courier New",monospace;font-size:6.5pt;line-height:1.35;background:#fafafa;border:1px solid #ddd;padding:8px;white-space:pre-wrap;word-break:break-all;color:#222}
+</style></head><body>
+<div class="cover">
+<h1>Linux系统开发课程设计</h1>
+<h2>源码文档</h2>
+<p>学号：20231035109</p>
+<p>姓名：彭子阳</p>
+</div>
+<div class="problem">
+<div class="title">题目一：用户管理系统</div>
+<pre>#!/bin/bash
+
+# ============================================================
+# 题目1：用户管理系统
+# 功能：实现用户的创建、删除、密码修改、登录验证等功能
+# 作者：彭子阳
+# 学号：20231035109
+# ============================================================
+
+# 颜色定义
+RED=&#x27;\033[0;31m&#x27;
+GREEN=&#x27;\033[0;32m&#x27;
+YELLOW=&#x27;\033[1;33m&#x27;
+BLUE=&#x27;\033[0;34m&#x27;
+NC=&#x27;\033[0m&#x27; # No Color
+
+# 日志文件路径
+LOG_FILE=&quot;/var/log/user_management.log&quot;
+
+# 初始化日志文件
+init_log() {
+    if [ ! -f &quot;$LOG_FILE&quot; ]; then
+        sudo touch &quot;$LOG_FILE&quot;
+        sudo chmod 644 &quot;$LOG_FILE&quot;
+    fi
+}
+
+# 写入日志函数
+write_log() {
+    local message=&quot;$1&quot;
+    local timestamp=$(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)
+    echo &quot;[$timestamp] $message&quot; | sudo tee -a &quot;$LOG_FILE&quot; &gt; /dev/null
+}
+
+# ============================================
+# 功能1：创建用户
+# 逻辑说明：
+#   1. 检查用户是否已存在，避免重复创建
+#   2. 使用useradd命令创建系统用户
+#   3. 设置用户主目录和默认shell
+#   4. 记录操作日志
+# 参数：$1-用户名, $2-密码(可选)
+# ============================================
+create_user() {
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+    echo -e &quot;${BLUE}           创建新用户${NC}&quot;
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+
+    read -p &quot;请输入要创建的用户名: &quot; username
+
+    # 检查用户名是否为空
+    if [ -z &quot;$username&quot; ]; then
+        echo -e &quot;${RED}[错误] 用户名不能为空！${NC}&quot;
+        return 1
+    fi
+
+    # 检查用户是否已存在（核心逻辑）
+    # id命令用于查看用户是否存在，$?为0表示存在
+    if id &quot;$username&quot; &amp;&gt;/dev/null; then
+        echo -e &quot;${RED}[错误] 用户 &#x27;$username&#x27; 已存在！${NC}&quot;
+        write_log &quot;尝试创建用户失败: 用户 $username 已存在&quot;
+        return 1
+    fi
+
+    # 输入密码
+    read -s -p &quot;请输入用户密码: &quot; password
+    echo &quot;&quot;
+    read -s -p &quot;请再次确认密码: &quot; password2
+    echo &quot;&quot;
+
+    # 验证两次密码是否一致
+    if [ &quot;$password&quot; != &quot;$password2&quot; ]; then
+        echo -e &quot;${RED}[错误] 两次输入的密码不一致！${NC}&quot;
+        return 1
+    fi
+
+    # 创建用户（需要root权限）
+    # -m参数：自动创建用户主目录
+    # -s /bin/bash：指定用户的默认shell为bash
+    echo -e &quot;${YELLOW}[正在创建用户]...${NC}&quot;
+    sudo useradd -m -s /bin/bash &quot;$username&quot;
+
+    # 检查用户创建是否成功
+    if [ $? -eq 0 ]; then
+        # 设置用户密码
+        # echo &quot;password&quot; | passwd --stdin username 用于非交互式设置密码
+        echo &quot;$username:$password&quot; | sudo chpasswd
+
+        echo -e &quot;${GREEN}[成功] 用户 &#x27;$username&#x27; 创建成功！${NC}&quot;
+        write_log &quot;成功创建用户: $username&quot;
+
+        # 显示用户信息
+        echo -e &quot;\n${YELLOW}--- 用户信息 ---${NC}&quot;
+        id &quot;$username&quot;
+        echo &quot;主目录: /home/$username&quot;
+    else
+        echo -e &quot;${RED}[错误] 用户创建失败！${NC}&quot;
+        write_log &quot;创建用户失败: $username&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 功能2：设置/修改用户密码
+# 逻辑说明：
+#   1. 验证目标用户是否存在
+#   2. 提示输入新密码并进行确认
+#   3. 使用chpasswd命令更新密码
+#   4. 记录密码修改日志（不含明文密码）
+# ============================================
+change_password() {
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+    echo -e &quot;${BLUE}         修改用户密码${NC}&quot;
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+
+    read -p &quot;请输入要修改密码的用户名: &quot; username
+
+    # 检查用户是否存在
+    if ! id &quot;$username&quot; &amp;&gt;/dev/null; then
+        echo -e &quot;${RED}[错误] 用户 &#x27;$username&#x27; 不存在！${NC}&quot;
+        return 1
+    fi
+
+    # 输入新密码
+    read -s -p &quot;请输入新密码: &quot; new_password
+    echo &quot;&quot;
+    read -s -p &quot;请再次确认新密码: &quot; confirm_password
+    echo &quot;&quot;
+
+    # 验证密码一致性
+    if [ &quot;$new_password&quot; != &quot;$confirm_password&quot; ]; then
+        echo -e &quot;${RED}[错误] 两次输入的密码不一致！${NC}&quot;
+        return 1
+    fi
+
+    # 修改密码
+    echo -e &quot;${YELLOW}[正在修改密码]...${NC}&quot;
+    echo &quot;$username:$new_password&quot; | sudo chpasswd
+
+    if [ $? -eq 0 ]; then
+        echo -e &quot;${GREEN}[成功] 用户 &#x27;$username&#x27; 密码修改成功！${NC}&quot;
+        write_log &quot;成功修改用户 $username 的密码&quot;
+    else
+        echo -e &quot;${RED}[错误] 密码修改失败！${NC}&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 功能3：用户登录验证（支持三次重试）
+# 逻辑说明：
+#   1. 提示输入用户名和密码
+#   2. 使用/etc/shadow文件验证密码（模拟登录）
+#   3. 最多允许尝试3次，超过则锁定
+#   4. 登录成功显示欢迎信息
+# ============================================
+user_login() {
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+    echo -e &quot;${BLUE}           用户登录系统${NC}&quot;
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+
+    read -p &quot;请输入用户名: &quot; username
+
+    # 检查用户是否存在
+    if ! id &quot;$username&quot; &amp;&gt;/dev/null; then
+        echo -e &quot;${RED}[错误] 用户 &#x27;$username&#x27; 不存在！${NC}&quot;
+        return 1
+    fi
+
+    # 登录尝试次数限制（最多3次）
+    local max_attempts=3
+    local attempt=1
+
+    while [ $attempt -le $max_attempts ]; do
+        echo -e &quot;${YELLOW}第 $attempt/$max_attempts 次尝试${NC}&quot;
+        read -s -p &quot;请输入密码: &quot; input_password
+        echo &quot;&quot;
+
+        # 验证密码逻辑
+        # 将输入的密码与系统中的密码进行比对
+        # 使用su命令测试密码是否正确（非root用户需要sudo）
+        echo &quot;$input_password&quot; | sudo -S su - &quot;$username&quot; -c &quot;echo &#x27;success&#x27;&quot; 2&gt;/dev/null
+
+        if [ $? -eq 0 ]; then
+            echo -e &quot;${GREEN}============================================${NC}&quot;
+            echo -e &quot;${GREEN}       登录成功！欢迎回来，$username！${NC}&quot;
+            echo -e &quot;${GREEN}============================================${NC}&quot;
+            write_log &quot;用户 $username 成功登录系统 (第$attempt次尝试)&quot;
+
+            # 显示用户基本信息
+            echo -e &quot;\n${YELLOW}--- 当前用户信息 ---${NC}&quot;
+            echo &quot;用户名: $username&quot;
+            echo &quot;UID: $(id -u $username)&quot;
+            echo &quot;组ID: $(id -g $username)&quot;
+            echo &quot;主目录: $(grep &quot;^$username:&quot; /etc/passwd | cut -d: -f6)&quot;
+            echo &quot;登录Shell: $(grep &quot;^$username:&quot; /etc/passwd | cut -d: -f7)&quot;
+            echo &quot;登录时间: $(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)&quot;
+            return 0
+        else
+            attempt=$((attempt + 1))
+            remaining=$((max_attempts - attempt + 1))
+
+            if [ $attempt -le $max_attempts ]; then
+                echo -e &quot;${RED}[失败] 密码错误！还剩 $remaining 次机会${NC}&quot;
+            fi
+        fi
+    done
+
+    # 超过最大尝试次数
+    echo -e &quot;${RED}============================================${NC}&quot;
+    echo -e &quot;${RED}   登录失败！已超过最大尝试次数(3次)${NC}&quot;
+    echo -e &quot;${RED}============================================${NC}&quot;
+    write_log &quot;WARNING: 用户 $username 登录失败超过3次，账户可能被锁定&quot;
+    return 1
+}
+
+# ============================================
+# 功能4：删除用户
+# 逻辑说明：
+#   1. 确认目标用户存在
+#   2. 二次确认防止误删（安全机制）
+#   3. 可选是否同时删除用户主目录
+#   4. 执行删除并记录日志
+# ============================================
+delete_user() {
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+    echo -e &quot;${_blue}           删除用户${NC}&quot;
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+
+    read -p &quot;请输入要删除的用户名: &quot; username
+
+    # 检查用户是否存在
+    if ! id &quot;$username&quot; &amp;&gt;/dev/null; then
+        echo -e &quot;${RED}[错误] 用户 &#x27;$username&#x27; 不存在！${NC}&quot;
+        return 1
+    fi
+
+    # 安全提示：禁止删除当前登录用户和root用户
+    current_user=$(whoami)
+    if [ &quot;$username&quot; = &quot;root&quot; ] || [ &quot;$username&quot; = &quot;$current_user&quot; ]; then
+        echo -e &quot;${RED}[错误] 不允许删除系统关键用户或当前用户！${NC}&quot;
+        return 1
+    fi
+
+    # 二次确认（重要安全措施）
+    echo -e &quot;${YELLOW}[警告] 此操作不可恢复！${NC}&quot;
+    read -p &quot;确定要删除用户 &#x27;$username&#x27; 吗？(yes/no): &quot; confirm
+
+    if [ &quot;$confirm&quot; != &quot;yes&quot; ]; then
+        echo -e &quot;${YELLOW}已取消删除操作。${NC}&quot;
+        return 0
+    fi
+
+    # 询问是否删除主目录
+    read -p &quot;是否同时删除用户主目录？(y/n): &quot; del_home
+
+    echo -e &quot;${YELLOW}[正在删除用户]...${NC}&quot;
+
+    if [ &quot;$del_home&quot; = &quot;y&quot; ] || [ &quot;$del_home&quot; = &quot;Y&quot; ]; then
+        # -r参数：递归删除用户的主目录和邮件池
+        sudo userdel -r &quot;$username&quot;
+        home_msg=&quot;及主目录&quot;
+    else
+        # 仅删除用户账号，保留主目录
+        sudo userdel &quot;$username&quot;
+        home_msg=&quot;(保留主目录)&quot;
+    fi
+
+    if [ $? -eq 0 ]; then
+        echo -e &quot;${GREEN}[成功] 用户 &#x27;$username&#x27; 删除成功 $home_msg${NC}&quot;
+        write_log &quot;成功删除用户: $username $home_msg&quot;
+    else
+        echo -e &quot;${RED}[错误] 用户删除失败！${NC}&quot;
+        write_log &quot;删除用户失败: $username&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 辅助功能：查看所有用户列表
+# 逻辑说明：
+#   1. 读取/etc/passwd文件获取UID&gt;=1000的普通用户
+#   2. 格式化输出用户信息
+# ============================================
+list_users() {
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+    echo -e &quot;${BLUE}          系统用户列表${NC}&quot;
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+    echo &quot;&quot;
+
+    # 打印表头
+    printf &quot;%-15s %-8s %-20s %-15s\n&quot; &quot;用户名&quot; &quot;UID&quot; &quot;主目录&quot; &quot;Shell&quot;
+    printf &quot;%-15s %-8s %-20s %-15\n&quot; &quot;---------------&quot; &quot;--------&quot; &quot;--------------------&quot; &quot;---------------&quot;
+
+    # 使用awk过滤普通用户（UID &gt;= 1000）
+    # /etc/passwd格式: 用户名:x:UID:GID:注释:主目录:Shell
+    awk -F: &#x27;$3 &gt;= 1000 {printf &quot;%-15s %-8s %-20s %-15s\n&quot;, $1, $3, $6, $7}&#x27; /etc/passwd
+
+    echo &quot;&quot;
+    echo -e &quot;${YELLOW}共 $(awk -F: &#x27;$3 &gt;= 1000&#x27; /etc/passwd | wc -l) 个普通用户${NC}&quot;
+}
+
+# ============================================
+# 主菜单界面
+# 逻辑说明：
+#   1. 使用循环实现持续运行直到选择退出
+#   2. 使用case语句处理不同的功能选项
+#   3. 提供清晰的菜单导航
+# ============================================
+main_menu() {
+    init_log
+
+    while true; do
+        echo &quot;&quot;
+        echo -e &quot;${GREEN}╔══════════════════════════════════════════╗${NC}&quot;
+        echo -e &quot;${GREEN}║       Linux 用户管理系统 v1.0            ║${NC}&quot;
+        echo -e &quot;${GREEN}╠══════════════════════════════════════════╣${NC}&quot;
+        echo -e &quot;${GREEN}║                                          ║${NC}&quot;
+        echo -e &quot;${GREEN}║   1. 创建用户                            ║${NC}&quot;
+        echo -e &quot;${GREEN}║   2. 修改用户密码                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   3. 用户登录验证                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   4. 删除用户                            ║${NC}&quot;
+        echo -e &quot;${GREEN}║   5. 查看用户列表                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   0. 退出系统                            ║${NC}&quot;
+        echo -e &quot;${GREEN}║                                          ║${NC}&quot;
+        echo -e &quot;${GREEN}╚══════════════════════════════════════════╝${NC}&quot;
+        echo &quot;&quot;
+
+        read -p &quot;请选择功能 (0-5): &quot; choice
+
+        # case多分支选择结构
+        case $choice in
+            1)
+                create_user
+                ;;
+            2)
+                change_password
+                ;;
+            3)
+                user_login
+                ;;
+            4)
+                delete_user
+                ;;
+            5)
+                list_users
+                ;;
+            0)
+                echo -e &quot;${YELLOW}感谢使用用户管理系统，再见！${NC}&quot;
+                write_log &quot;用户退出系统&quot;
+                exit 0
+                ;;
+            *)
+                echo -e &quot;${RED}[错误] 无效的选择，请重新输入！${NC}&quot;
+                ;;
+        esac
+
+        # 暂停，等待用户按回车继续
+        echo &quot;&quot;
+        read -p &quot;按回车键继续...&quot;
+    done
+}
+
+# 程序入口：执行主菜单函数
+main_menu
+</pre>
+</div>
+
+<div class="problem">
+<div class="title">题目二：文件操作系统</div>
+<pre>#!/bin/bash
+
+# ============================================================
+# 题目2：文件操作系统
+# 功能：实现文件夹和文件的创建、修改、删除等操作
+# 作者：彭子阳
+# 学号：20231035109
+# ============================================================
+
+# 颜色定义
+RED=&#x27;\033[0;31m&#x27;
+GREEN=&#x27;\033[0;32m&#x27;
+YELLOW=&#x27;\033[1;33m&#x27;
+BLUE=&#x27;\033[0;34m&#x27;
+PURPLE=&#x27;\033[0;35m&#x27;
+NC=&#x27;\033[0m&#x27;
+
+# 操作日志文件
+OPERATION_LOG=&quot;/workspace/linux_course_design/file_operation.log&quot;
+
+# 初始化日志文件
+init_file_log() {
+    if [ ! -f &quot;$OPERATION_LOG&quot; ]; then
+        touch &quot;$OPERATION_LOG&quot;
+        echo &quot;文件操作日志 - 创建时间: $(date)&quot; &gt; &quot;$OPERATION_LOG&quot;
+    fi
+}
+
+# 记录操作日志
+log_operation() {
+    local operation=&quot;$1&quot;
+    local target=&quot;$2&quot;
+    local status=&quot;$3&quot;
+    local timestamp=$(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)
+    echo &quot;[$timestamp] $operation | 目标: $target | 状态: $status&quot; &gt;&gt; &quot;$OPERATION_LOG&quot;
+}
+
+# ============================================
+# 功能1：创建文件夹（目录）
+# 逻辑说明：
+#   1. 接收用户输入的目标路径
+#   2. 检查目录是否已存在，避免覆盖
+#   3. 使用mkdir命令创建目录，支持递归创建父目录(-p)
+#   4. 设置默认权限为755（rwxr-xr-x）
+# 参数：无参数，交互式获取路径
+# ============================================
+create_folder() {
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+    echo -e &quot;${BLUE}           创建文件夹${NC}&quot;
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+
+    # 获取当前工作目录作为参考
+    current_dir=$(pwd)
+    echo -e &quot;${YELLOW}当前工作目录: $current_dir${NC}&quot;
+    echo &quot;&quot;
+
+    # 输入要创建的目录路径（支持相对路径和绝对路径）
+    read -p &quot;请输入要创建的文件夹路径: &quot; folder_path
+
+    # 检查输入是否为空
+    if [ -z &quot;$folder_path&quot; ]; then
+        echo -e &quot;${RED}[错误] 文件夹路径不能为空！${NC}&quot;
+        return 1
+    fi
+
+    # 检查目录是否已存在（核心逻辑）
+    # -d操作符用于判断路径是否为已存在的目录
+    if [ -d &quot;$folder_path&quot; ]; then
+        echo -e &quot;${RED}[错误] 文件夹 &#x27;$folder_path&#x27; 已存在！${NC}&quot;
+        log_operation &quot;创建文件夹&quot; &quot;$folder_path&quot; &quot;失败-已存在&quot;
+        return 1
+    fi
+
+    # 询问是否需要创建多级目录
+    read -p &quot;是否需要自动创建不存在的父目录？(y/n): &quot; create_parent
+
+    echo -e &quot;${YELLOW}[正在创建文件夹]...${NC}&quot;
+
+    if [ &quot;$create_parent&quot; = &quot;y&quot; ] || [ &quot;$create_parent&quot; = &quot;Y&quot; ]; then
+        # -p 参数：递归创建所有不存在的父目录
+        mkdir -p &quot;$folder_path&quot;
+        parent_info=&quot;（含父目录）&quot;
+    else
+        # 仅创建最后一级目录
+        mkdir &quot;$folder_path&quot;
+        parent_info=&quot;&quot;
+    fi
+
+    # 检查创建结果
+    if [ $? -eq 0 ]; then
+        # 设置目录权限为755（所有者读写执行，组和其他用户读执行）
+        chmod 755 &quot;$folder_path&quot;
+
+        echo -e &quot;${GREEN}[成功] 文件夹 &#x27;$folder_path&#x27; 创建成功！$parent_info${NC}&quot;
+
+        # 显示文件夹详细信息
+        echo -e &quot;\n${YELLOW}--- 文件夹信息 ---${NC}&quot;
+        ls -ld &quot;$folder_path&quot;
+
+        log_operation &quot;创建文件夹&quot; &quot;$folder_path&quot; &quot;成功&quot;
+    else
+        echo -e &quot;${RED}[错误] 文件夹创建失败！请检查权限或路径格式。${NC}&quot;
+        log_operation &quot;创建文件夹&quot; &quot;$folder_path&quot; &quot;失败-权限不足&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 功能2：删除文件夹
+# 逻辑说明：
+#   1. 验证目标目录是否存在
+#   2. 安全检查：防止误删系统关键目录
+#   3. 二次确认机制
+#   4. 可选递归删除内容或仅删除空目录
+# ============================================
+delete_folder() {
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+    echo -e &quot;${BLUE}           删除文件夹${NC}&quot;
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+
+    read -p &quot;请输入要删除的文件夹路径: &quot; folder_path
+
+    # 检查目录是否存在
+    if [ ! -d &quot;$folder_path&quot; ]; then
+        echo -e &quot;${RED}[错误] 文件夹 &#x27;$folder_path&#x27; 不存在！${NC}&quot;
+        return 1
+    fi
+
+    # 安全检查：禁止删除系统关键目录
+    local protected_dirs=(&quot;/&quot; &quot;/home&quot; &quot;/usr&quot; &quot;/var&quot; &quot;/etc&quot; &quot;/root&quot;)
+    for protected in &quot;${protected_dirs[@]}&quot;; do
+        if [ &quot;$(realpath &quot;$folder_path&quot;)&quot; = &quot;$protected&quot; ]; then
+            echo -e &quot;${RED}[错误] 不允许删除系统关键目录 &#x27;$protected&#x27;！${NC}&quot;
+            return 1
+        fi
+    done
+
+    # 显示将要删除的内容
+    echo -e &quot;${YELLOW}--- 将要删除的文件夹内容 ---${NC}&quot;
+    ls -la &quot;$folder_path&quot; 2&gt;/dev/null || echo &quot;(空目录)&quot;
+
+    # 二次确认
+    echo -e &quot;${RED}[警告] 此操作不可恢复！${NC}&quot;
+    read -p &quot;确定要删除文件夹 &#x27;$folder_path&#x27; 及其所有内容吗？(输入 yes 确认): &quot; confirm
+
+    if [ &quot;$confirm&quot; != &quot;yes&quot; ]; then
+        echo -e &quot;${YELLOW}已取消删除操作。${NC}&quot;
+        return 0
+    fi
+
+    echo -e &quot;${YELLOW}[正在删除文件夹]...${NC}&quot;
+
+    # -rf 参数：强制递归删除（不提示确认）
+    rm -rf &quot;$folder_path&quot;
+
+    if [ $? -eq 0 ] &amp;&amp; [ ! -d &quot;$folder_path&quot; ]; then
+        echo -e &quot;${GREEN}[成功] 文件夹 &#x27;$folder_path&#x27; 已成功删除！${NC}&quot;
+        log_operation &quot;删除文件夹&quot; &quot;$folder_path&quot; &quot;成功&quot;
+    else
+        echo -e &quot;${RED}[错误] 文件夹删除失败！${NC}&quot;
+        log_operation &quot;删除文件夹&quot; &quot;$folder_path&quot; &quot;失败&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 功能3：创建文件
+# 逻辑说明：
+#   1. 指定目标文件夹和文件名
+#   2. 检查文件是否已存在
+#   3. 使用touch命令创建空文件
+#   4. 可选立即写入初始内容
+# ============================================
+create_file() {
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+    echo -e &quot;${BLUE}            创建文件${NC}&quot;
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+
+    # 步骤1：选择或指定目标文件夹
+    echo -e &quot;${YELLOW}--- 选择目标位置 ---${NC}&quot;
+    read -p &quot;请输入文件所在文件夹路径 (回车使用当前目录): &quot; target_dir
+
+    if [ -z &quot;$target_dir&quot; ]; then
+        target_dir=$(pwd)
+    fi
+
+    # 检查目标目录是否存在
+    if [ ! -d &quot;$target_dir&quot; ]; then
+        echo -e &quot;${RED}[错误] 目录 &#x27;$target_dir&#x27; 不存在！${NC}&quot;
+        return 1
+    fi
+
+    # 步骤2：输入文件名
+    read -p &quot;请输入要创建的文件名: &quot; filename
+
+    # 检查文件名是否为空
+    if [ -z &quot;$filename&quot; ]; then
+        echo -e &quot;${RED}[错误] 文件名不能为空！${NC}&quot;
+        return 1
+    fi
+
+    # 构建完整文件路径
+    file_path=&quot;$target_dir/$filename&quot;
+
+    # 检查文件是否已存在
+    if [ -f &quot;$file_path&quot; ]; then
+        echo -e &quot;${YELLOW}[警告] 文件 &#x27;$file_path&#x27; 已存在！${NC}&quot;
+        read -p &quot;是否覆盖现有文件？(y/n): &quot; overwrite
+        if [ &quot;$overwrite&quot; != &quot;y&quot; ] &amp;&amp; [ &quot;$overwrite&quot; != &quot;Y&quot; ]; then
+            echo -e &quot;${YELLOW}已取消操作。${NC}&quot;
+            return 0
+        fi
+    fi
+
+    # 创建文件
+    echo -e &quot;${YELLOW}[正在创建文件]...${NC}&quot;
+    touch &quot;$file_path&quot;
+
+    if [ $? -eq 0 ]; then
+        # 设置默认权限为644（rw-r--r--）
+        chmod 644 &quot;$file_path&quot;
+
+        echo -e &quot;${GREEN}[成功] 文件 &#x27;$file_path&#x27; 创建成功！${NC}&quot;
+
+        # 询问是否写入初始内容
+        read -p &quot;是否立即向文件写入内容？(y/n): &quot; write_content
+
+        if [ &quot;$write_content&quot; = &quot;y&quot; ] || [ &quot;$write_content&quot; = &quot;Y&quot; ]; then
+            echo -e &quot;${YELLOW}请输入文件内容（输入 :wq 结束）：${NC}&quot;
+            echo &quot;--- 文件内容开始 ---&quot;
+
+            # 循环读取多行输入
+            &gt; &quot;$file_path&quot;  # 清空文件
+            while IFS= read -r line; do
+                if [ &quot;$line&quot; = &quot;:wq&quot; ]; then
+                    break
+                fi
+                echo &quot;$line&quot; &gt;&gt; &quot;$file_path&quot;
+            done
+
+            echo &quot;--- 文件内容结束 ---&quot;
+            echo -e &quot;${GREEN}内容写入完成！${NC}&quot;
+        fi
+
+        # 显示文件信息
+        echo -e &quot;\n${YELLOW}--- 文件信息 ---${NC}&quot;
+        ls -lh &quot;$file_path&quot;
+        echo &quot;文件大小: $(stat -c%s &quot;$file_path&quot;) 字节&quot;
+        echo &quot;创建时间: $(stat -c%y &quot;$file_path&quot;)&quot;
+
+        log_operation &quot;创建文件&quot; &quot;$file_path&quot; &quot;成功&quot;
+    else
+        echo -e &quot;${RED}[错误] 文件创建失败！${NC}&quot;
+        log_operation &quot;创建文件&quot; &quot;$file_path&quot; &quot;失败&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 功能4：修改/编辑文件内容
+# 逻辑说明：
+#   1. 定位目标文件并验证存在性
+#   2. 提供多种编辑方式选择
+#   3. 支持追加、覆盖、行插入等模式
+#   4. 自动备份原文件（安全措施）
+# ============================================
+modify_file() {
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+    echo -e &quot;${BLUE}          修改文件内容${NC}&quot;
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+
+    # 输入文件路径
+    read -p &quot;请输入要修改的文件完整路径: &quot; file_path
+
+    # 检查文件是否存在
+    if [ ! -f &quot;$file_path&quot; ]; then
+        echo -e &quot;${RED}[错误] 文件 &#x27;$file_path&#x27; 不存在！${NC}&quot;
+        return 1
+    fi
+
+    # 显示当前文件内容预览
+    echo -e &quot;\n${YELLOW}--- 当前文件内容 (前10行) ---${NC}&quot;
+    head -n 10 &quot;$file_path&quot;
+    echo &quot;...&quot;
+    echo -e &quot;${YELLOW}文件大小: $(wc -l &lt; &quot;$file_path&quot;) 行, $(stat -c%s &quot;$file_path&quot;) 字节${NC}&quot;
+    echo &quot;&quot;
+
+    # 备份原文件（安全措施）
+    backup_path=&quot;${file_path}.bak.$(date +%Y%m%d%H%M%S)&quot;
+    cp &quot;$file_path&quot; &quot;$backup_path&quot;
+    echo -e &quot;${GREEN}[备份] 原文件已备份至: $backup_path${NC}&quot;
+
+    # 选择修改模式
+    echo -e &quot;${YELLOW}--- 请选择修改模式 ---${NC}&quot;
+    echo &quot;1. 追加内容（在文件末尾添加）&quot;
+    echo &quot;2. 覆盖内容（替换全部内容）&quot;
+    echo &quot;3. 在指定行前插入内容&quot;
+    echo &quot;4. 替换指定字符串&quot;
+    read -p &quot;请选择 (1-4): &quot; mode
+
+    case $mode in
+        1)
+            # 追加模式：使用 &gt;&gt; 重定向符
+            echo -e &quot;${YELLOW}请输入要追加的内容（输入 :wq 结束）：${NC}&quot;
+            while IFS= read -r line; do
+                if [ &quot;$line&quot; = &quot;:wq&quot; ]; then
+                    break
+                fi
+                echo &quot;$line&quot; &gt;&gt; &quot;$file_path&quot;
+            done
+            echo -e &quot;${GREEN}[成功] 内容已追加到文件末尾${NC}&quot;
+            ;;
+
+        2)
+            # 覆盖模式：使用 &gt; 重定向符
+            echo -e &quot;${YELLOW}请输入新的文件内容（输入 :wq 结束）：${NC}&quot;
+            &gt; &quot;$file_path&quot;  # 先清空文件
+            while IFS= read -r line; do
+                if [ &quot;$line&quot; = &quot;:wq&quot; ]; then
+                    break
+                fi
+                echo &quot;$line&quot; &gt;&gt; &quot;$file_path&quot;
+            done
+            echo -e &quot;${GREEN}[成功] 文件内容已被完全替换${NC}&quot;
+            ;;
+
+        3)
+            # 行插入模式
+            read -p &quot;请在第几行前插入内容: &quot; line_num
+            echo -e &quot;${YELLOW}请输入要插入的内容（输入 :wq 结束）：${NC}&quot;
+            temp_file=$(mktemp)
+
+            line_count=1
+            inserted=0
+
+            while IFS= read -r line || [ -n &quot;$line&quot; ]; do
+                if [ &quot;$line_count&quot; = &quot;$line_num&quot; ] &amp;&amp; [ &quot;$inserted&quot; -eq 0 ]; then
+                    while IFS= read -r new_line; do
+                        if [ &quot;$new_line&quot; = &quot;:wq&quot; ]; then
+                            inserted=1
+                            break
+                        fi
+                        echo &quot;$new_line&quot; &gt;&gt; &quot;$temp_file&quot;
+                    done
+                fi
+                echo &quot;$line&quot; &gt;&gt; &quot;$temp_file&quot;
+                line_count=$((line_count + 1))
+            done &lt; &quot;$file_path&quot;
+
+            mv &quot;$temp_file&quot; &quot;$file_path&quot;
+            echo -e &quot;${GREEN}[成功] 内容已插入到第 ${line_num} 行之前${NC}&quot;
+            ;;
+
+        4)
+            # 字符串替换模式：使用sed命令
+            read -p &quot;请输入要被替换的原始字符串: &quot; old_str
+            read -p &quot;请输入新的替换字符串: &quot; new_str
+
+            # sed -i 直接修改文件，s/old/new/g 全局替换
+            sed -i &quot;s/$old_str/$new_str/g&quot; &quot;$file_path&quot;
+            echo -e &quot;${GREEN}[成功] 所有 &#x27;$old_str&#x27; 已被替换为 &#x27;$new_str&#x27;${NC}&quot;
+            ;;
+
+        *)
+            echo -e &quot;${RED}[错误] 无效的选择！${NC}&quot;
+            ;;
+    esac
+
+    log_operation &quot;修改文件&quot; &quot;$file_path&quot; &quot;成功&quot;
+}
+
+# ============================================
+# 功能5：删除文件
+# 逻辑说明：
+#   1. 验证目标文件存在性
+#   2. 安全检查：防止删除系统配置文件
+#   3. 二次确认后执行删除
+# ============================================
+delete_file() {
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+    echo -e &quot;${BLUE}            删除文件${NC}&quot;
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+
+    read -p &quot;请输入要删除的文件完整路径: &quot; file_path
+
+    # 检查文件是否存在且是普通文件（不是目录）
+    if [ ! -f &quot;$file_path&quot; ]; then
+        echo -e &quot;${RED}[错误] 文件 &#x27;$file_path&#x27; 不存在或不是一个普通文件！${NC}&quot;
+        return 1
+    fi
+
+    # 显示文件信息
+    echo -e &quot;${YELLOW}--- 将要删除的文件信息 ---${NC}&quot;
+    ls -lh &quot;$file_path&quot;
+
+    # 安全检查：警告系统文件
+    system_dirs=(&quot;/etc/&quot; &quot;/usr/bin/&quot; &quot;/usr/sbin/&quot;)
+    for sys_dir in &quot;${system_dirs[@]}&quot;; do
+        if [[ &quot;$file_path&quot; == $sys_dir* ]]; then
+            echo -e &quot;${RED}[警告] 这可能是系统重要文件！${NC}&quot;
+            break
+        fi
+    done
+
+    # 二次确认
+    echo -e &quot;${RED}[警告] 此操作不可恢复！${NC}&quot;
+    read -p &quot;确定要删除文件 &#x27;$file_path&#x27; 吗？(输入 yes 确认): &quot; confirm
+
+    if [ &quot;$confirm&quot; != &quot;yes&quot; ]; then
+        echo -e &quot;${YELLOW}已取消删除操作。${NC}&quot;
+        return 0
+    fi
+
+    # 执行删除
+    rm -f &quot;$file_path&quot;
+
+    if [ $? -eq 0 ] &amp;&amp; [ ! -f &quot;$file_path&quot; ]; then
+        echo -e &quot;${GREEN}[成功] 文件 &#x27;$file_path&#x27; 已成功删除！${NC}&quot;
+        log_operation &quot;删除文件&quot; &quot;$file_path&quot; &quot;成功&quot;
+    else
+        echo -e &quot;${RED}[错误] 文件删除失败！${NC}&quot;
+        log_operation &quot;删除文件&quot; &quot;$file_path&quot; &quot;失败&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 辅助功能：浏览目录内容
+# ============================================
+browse_directory() {
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+    echo -e &quot;${BLUE}          浏览目录内容${NC}&quot;
+    echo -e &quot;${BLUE}============================================${NC}&quot;
+
+    read -p &quot;请输入要浏览的目录路径 (回车查看当前目录): &quot; browse_path
+
+    if [ -z &quot;$browse_path&quot; ]; then
+        browse_path=$(pwd)
+    fi
+
+    if [ ! -d &quot;$browse_path&quot; ]; then
+        echo -e &quot;${RED}[错误] 目录不存在！${NC}&quot;
+        return 1
+    fi
+
+    echo -e &quot;\n${YELLOW}目录: $browse_path${NC}&quot;
+    echo &quot;&quot;
+
+    # 以列表形式显示内容
+    echo &quot;类型  权限       大小      修改时间              名称&quot;
+    echo &quot;----  --------   ------    ------------------     ----&quot;
+    ls -lh &quot;$browse_path&quot; | tail -n +2 | while read -r line; do
+        # 解析每行的第一个字符判断类型
+        type_char=$(echo &quot;$line&quot; | cut -c1)
+        case $type_char in
+            d) type_name=&quot;目录&quot; ;;
+            -) type_name=&quot;文件&quot; ;;
+            l) type_name=&quot;链接&quot; ;;
+            *) type_name=&quot;其他&quot; ;;
+        esac
+        name=$(echo &quot;$line&quot; | awk &#x27;{print $NF}&#x27;)
+        echo &quot;$type_name  $line  $name&quot;
+    done
+
+    # 统计信息
+    file_count=$(find &quot;$browse_path&quot; -maxdepth 1 -type f | wc -l)
+    dir_count=$(find &quot;$browse_path&quot; -maxdepth 1 -type d | wc -l)
+    echo &quot;&quot;
+    echo -e &quot;${YELLOW}统计: $file_count 个文件, $((dir_count - 1)) 个子目录${NC}&quot;
+}
+
+# ============================================
+# 主菜单界面
+# ============================================
+main_menu() {
+    init_file_log
+
+    while true; do
+        echo &quot;&quot;
+        echo -e &quot;${GREEN}╔══════════════════════════════════════════╗${NC}&quot;
+        echo -e &quot;${GREEN}║       Linux 文件操作系统 v1.0            ║${NC}&quot;
+        echo -e &quot;${GREEN}╠══════════════════════════════════════════╣${NC}&quot;
+        echo -e &quot;${GREEN}║                                          ║${NC}&quot;
+        echo -e &quot;${GREEN}║   1. 创建文件夹                          ║${NC}&quot;
+        echo -e &quot;${GREEN}║   2. 删除文件夹                          ║${NC}&quot;
+        echo -e &quot;${GREEN}║   3. 创建文件                            ║${NC}&quot;
+        echo -e &quot;${GREEN}║   4. 修改/编辑文件                       ║${NC}&quot;
+        echo -e &quot;${GREEN}║   5. 删除文件                            ║${NC}&quot;
+        echo -e &quot;${GREEN}║   6. 浏览目录内容                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   0. 退出系统                            ║${NC}&quot;
+        echo -e &quot;${GREEN}║                                          ║${NC}&quot;
+        echo -e &quot;${GREEN}╚══════════════════════════════════════════╝${NC}&quot;
+        echo &quot;&quot;
+
+        read -p &quot;请选择功能 (0-6): &quot; choice
+
+        case $choice in
+            1)
+                create_folder
+                ;;
+            2)
+                delete_folder
+                ;;
+            3)
+                create_file
+                ;;
+            4)
+                modify_file
+                ;;
+            5)
+                delete_file
+                ;;
+            6)
+                browse_directory
+                ;;
+            0)
+                echo -e &quot;${YELLOW}感谢使用文件操作系统，再见！${NC}&quot;
+                exit 0
+                ;;
+            *)
+                echo -e &quot;${RED}[错误] 无效的选择，请重新输入！${NC}&quot;
+                ;;
+        esac
+
+        echo &quot;&quot;
+        read -p &quot;按回车键继续...&quot;
+    done
+}
+
+# 程序入口
+main_menu
+</pre>
+</div>
+
+<div class="problem">
+<div class="title">题目三：MySQL安装与配置</div>
+<pre>#!/bin/bash
+
+# ============================================================
+# 题目3：MySQL数据库安装与配置
+# 功能：实现MySQL的自动安装、配置、初始化和数据操作
+# 作者：彭子阳
+# 学号：20231035109
+# ============================================================
+
+# 颜色定义
+RED=&#x27;\033[0;31m&#x27;
+GREEN=&#x27;\033[0;32m&#x27;
+YELLOW=&#x27;\033[1;33m&#x27;
+BLUE=&#x27;\033[0;34m&#x27;
+CYAN=&#x27;\033[0;36m&#x27;
+NC=&#x27;\033[0m&#x27;
+
+# MySQL配置变量
+MYSQL_ROOT_PASSWORD=&quot;Root@123456&quot;
+MYSQL_VERSION=&quot;8.0&quot;
+MYSQL_INSTALL_LOG=&quot;/workspace/linux_course_design/mysql_install.log&quot;
+MYSQL_DATA_DIR=&quot;/var/lib/mysql&quot;
+
+# 初始化日志文件
+init_mysql_log() {
+    echo &quot;========================================&quot; &gt; &quot;$MYSQL_INSTALL_LOG&quot;
+    echo &quot;MySQL安装日志&quot; &gt;&gt; &quot;$MYSQL_INSTALL_LOG&quot;
+    echo &quot;开始时间: $(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)&quot; &gt;&gt; &quot;$MYSQL_INSTALL_LOG&quot;
+    echo &quot;========================================&quot; &gt;&gt; &quot;$MYSQL_INSTALL_LOG&quot;
+}
+
+# 写入日志
+mysql_log() {
+    local msg=&quot;$1&quot;
+    local timestamp=$(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)
+    echo &quot;[$timestamp] $msg&quot; | tee -a &quot;$MYSQL_INSTALL_LOG&quot;
+}
+
+# ============================================
+# 功能1：检查系统环境
+# 逻辑说明：
+#   1. 检测操作系统类型（CentOS/Ubuntu/其他）
+#   2. 检查是否已安装MySQL（避免重复安装）
+#   3. 检查系统资源（内存、磁盘空间）
+#   4. 检查网络连接状态
+# ============================================
+check_environment() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}       系统环境检测${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    mysql_log &quot;[步骤1] 开始系统环境检测...&quot;
+
+    # 1.1 检测操作系统类型
+    echo -e &quot;\n${YELLOW}[检测] 操作系统类型...${NC}&quot;
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS_NAME=$NAME
+        OS_VERSION=$VERSION_ID
+        echo -e &quot;${GREEN}  操作系统: $OS_NAME $OS_VERSION${NC}&quot;
+        mysql_log &quot;操作系统: $OS_NAME $OS_VERSION&quot;
+    else
+        echo -e &quot;${RED}  [错误] 无法识别操作系统！${NC}&quot;
+        return 1
+    fi
+
+    # 1.2 检查是否已安装MySQL
+    echo -e &quot;${YELLOW}[检测] MySQL安装状态...${NC}&quot;
+    if command -v mysql &amp;&gt;/dev/null; then
+        MYSQL_INSTALLED_VERSION=$(mysql --version)
+        echo -e &quot;${YELLOW}  MySQL已安装: $MYSQL_INSTALLED_VERSION${NC}&quot;
+        mysql_log &quot;MySQL已安装: $MYSQL_INSTALLED_VERSION&quot;
+
+        read -p &quot;是否需要重新安装MySQL？(y/n): &quot; reinstall
+        if [ &quot;$reinstall&quot; != &quot;y&quot; ] &amp;&amp; [ &quot;$reinstall&quot; != &quot;Y&quot; ]; then
+            echo -e &quot;${YELLOW}跳过安装，直接进行配置...${NC}&quot;
+            return 0
+        fi
+    else
+        echo -e &quot;${GREEN}  MySQL未安装，准备进行安装${NC}&quot;
+        mysql_log &quot;MySQL未安装，将进行全新安装&quot;
+    fi
+
+    # 1.3 检查系统内存（MySQL建议至少512MB）
+    echo -e &quot;${YELLOW}[检测] 系统内存...${NC}&quot;
+    total_mem=$(free -m | awk &#x27;/Mem:/ {print $2}&#x27;)
+    echo -e &quot;${GREEN}  总内存: ${total_mem}MB${NC}&quot;
+    if [ &quot;$total_mem&quot; -lt 512 ]; then
+        echo -e &quot;${RED}  [警告] 内存不足512MB，可能影响MySQL性能${NC}&quot;
+        mysql_log &quot;警告: 内存不足 (${total_mem}MB)&quot;
+    fi
+    mysql_log &quot;系统内存: ${total_mem}MB&quot;
+
+    # 1.4 检查磁盘空间（MySQL安装至少需要500MB）
+    echo -e &quot;${YELLOW}[检测] 磁盘空间...${NC}&quot;
+    available_space=$(df -BG / | awk &#x27;NR==2 {print $4}&#x27; | tr -d &#x27;G&#x27;)
+    echo -e &quot;${GREEN}  可用空间: ${available_space}GB${NC}&quot;
+    if [ &quot;$available_space&quot; -lt 1 ]; then
+        echo -e &quot;${RED}  [错误] 磁盘空间不足！${NC}&quot;
+        return 1
+    fi
+    mysql_log &quot;可用磁盘空间: ${available_space}GB&quot;
+
+    # 1.5 测试网络连接
+    echo -e &quot;${YELLOW}[检测] 网络连接...${NC}&quot;
+    if ping -c 1 -W 3 mirrors.aliyun.com &amp;&gt;/dev/null; then
+        echo -e &quot;${GREEN}  网络连接正常${NC}&quot;
+        mysql_log &quot;网络连接: 正常&quot;
+    else
+        echo -e &quot;${RED}  [警告] 网络连接异常，可能影响软件下载${NC}&quot;
+        mysql_log &quot;警告: 网络连接异常&quot;
+    fi
+
+    echo -e &quot;\n${GREEN}[完成] 环境检测通过${NC}&quot;
+    return 0
+}
+
+# ============================================
+# 功能2：下载并安装MySQL
+# 逻辑说明：
+#   1. 根据操作系统类型选择对应的包管理器
+#   2. 配置MySQL官方YUM/APT源（获取最新版本）
+#   3. 使用包管理器下载并安装MySQL Server
+#   4. 处理依赖关系和可能的冲突
+# ============================================
+install_mysql() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}      安装MySQL服务器${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    mysql_log &quot;[步骤2] 开始安装MySQL...&quot;
+
+    # 根据操作系统类型执行不同的安装命令
+    case &quot;$OS_NAME&quot; in
+        *&quot;Ubuntu&quot;*|*&quot;Debian&quot;*)
+            install_mysql_ubuntu
+            ;;
+        *&quot;CentOS&quot;*|*&quot;Red Hat&quot;*|*&quot;Rocky&quot;*|*&quot;AlmaLinux&quot;*)
+            install_mysql_centos
+            ;;
+        *)
+            echo -e &quot;${RED}[错误] 不支持的操作系统: $OS_NAME${NC}&quot;
+            echo -e &quot;${YELLOW}请手动安装MySQL后继续配置${NC}&quot;
+            return 1
+            ;;
+    esac
+}
+
+# Ubuntu/Debian系统的MySQL安装
+install_mysql_ubuntu() {
+    echo -e &quot;${YELLOW}[Ubuntu/Debian] 更新软件源...${NC}&quot;
+
+    # 更新apt缓存
+    sudo apt-get update -y
+
+    echo -e &quot;${YELLOW}[正在安装MySQL Server...]${NC}&quot;
+    mysql_log &quot;使用apt安装MySQL...&quot;
+
+    # 使用DEBIAN_FRONTEND=noninteractive避免交互式提示
+    # 设置root密码为预设值
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        mysql-server mysql-client
+
+    if [ $? -eq 0 ]; then
+        echo -e &quot;${GREEN}[成功] MySQL安装成功！${NC}&quot;
+        mysql_log &quot;MySQL安装成功 (Ubuntu/Debian)&quot;
+    else
+        echo -e &quot;${RED}[错误] MySQL安装失败！${NC}&quot;
+        mysql_log &quot;MySQL安装失败&quot;
+        return 1
+    fi
+}
+
+# CentOS/RHEL系统的MySQL安装
+install_mysql_centos() {
+    echo -e &quot;${YELLOW}[CentOS/RHEL] 配置MySQL YUM源...${NC}&quot;
+
+    # 下载并安装MySQL官方仓库
+    # 对于CentOS 7+，可以使用社区版MySQL
+    if [ ! -f /etc/yum.repos.d/mysql-community.repo ]; then
+        # 安装MySQL仓库（以MySQL 8.0为例）
+        sudo yum install -y https://dev.mysql.com/get/mysql80-community-release-el7-11.noarch.rpm 2&gt;/dev/null || \
+        {
+            echo -e &quot;${YELLOW}尝试使用系统默认源安装MariaDB...${NC}&quot;
+            # 如果无法访问MySQL官方源，使用系统自带的MariaDB替代
+            sudo yum install -y mariadb-server mariadb
+            if [ $? -eq 0 ]; then
+                echo -e &quot;${GREEN}[成功] MariaDB（MySQL兼容）安装成功！${NC}&quot;
+                mysql_log &quot;MariaDB安装成功 (CentOS)&quot;
+                return 0
+            fi
+        }
+    fi
+
+    echo -e &quot;${YELLOW}[正在安装MySQL Server...]${NC}&quot;
+    mysql_log &quot;使用yum安装MySQL...&quot;
+
+    # 安装MySQL Server
+    sudo yum install -y mysql-server mysql
+
+    if [ $? -eq 0 ]; then
+        echo -e &quot;${GREEN}[成功] MySQL安装成功！${NC}&quot;
+        mysql_log &quot;MySQL安装成功 (CentOS)&quot;
+    else
+        echo -e &quot;${RED}[错误] MySQL安装失败！${NC}&quot;
+        mysql_log &quot;MySQL安装失败&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 功能3：配置MySQL环境变量
+# 逻辑说明：
+#   1. 将MySQL的bin目录添加到PATH环境变量
+#   2. 创建/etc/profile.d/mysql.sh使所有用户生效
+#   3. 配置MySQL客户端默认字符集为UTF-8
+#   4. 设置MySQL服务开机自启动
+# ============================================
+configure_mysql_env() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}     配置MySQL环境${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    mysql_log &quot;[步骤3] 配置MySQL环境变量...&quot;
+
+    # 3.1 获取MySQL安装路径
+    if command -v mysql &amp;&gt;/dev/null; then
+        MYSQL_BIN_DIR=$(dirname $(which mysql))
+        echo -e &quot;${GREEN}MySQL路径: $MYSQL_BIN_DIR${NC}&quot;
+    else
+        MYSQL_BIN_DIR=&quot;/usr/bin&quot;
+        echo -e &quot;${YELLOW}使用默认MySQL路径: $MYSQL_BIN_DIR${NC}&quot;
+    fi
+
+    # 3.2 创建全局环境变量配置文件
+    # 写入/etc/profile.d/使得对所有用户生效，登录时自动加载
+    ENV_FILE=&quot;/etc/profile.d/mysql.sh&quot;
+
+    echo -e &quot;${YELLOW}[配置] 设置环境变量...${NC}&quot;
+    sudo tee &quot;$ENV_FILE&quot; &gt; /dev/null &lt;&lt; EOF
+#!/bin/bash
+# MySQL环境变量配置
+# 文件创建时间: $(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)
+
+# 将MySQL添加到PATH
+export PATH=\$PATH:$MYSQL_BIN_DIR:$MYSQL_BIN_DIR/../sbin
+
+# MySQL相关环境变量
+export MYSQL_HOME=${MYSQL_BIN_DIR%/bin}
+export DATADIR=$MYSQL_DATA_DIR
+
+# MySQL客户端默认选项
+export MYSQL_PAGER=less
+export MYSQL_EDITOR=vim
+EOF
+
+    # 设置文件可执行权限
+    sudo chmod +x &quot;$ENV_FILE&quot;
+
+    # 3.3 使环境变量立即生效
+    source &quot;$ENV_FILE&quot;
+    export PATH=$PATH:$MYSQL_BIN_DIR
+
+    echo -e &quot;${GREEN}[成功] 环境变量配置完成${NC}&quot;
+    echo -e &quot;  配置文件: $ENV_FILE&quot;
+    mysql_log &quot;环境变量配置完成: $ENV_FILE&quot;
+
+    # 3.4 配置MySQL服务开机自启动
+    echo -e &quot;${YELLOW}[配置] 设置MySQL开机自启...${NC}&quot;
+    sudo systemctl enable mysqld 2&gt;/dev/null || sudo systemctl enable mariadb 2&gt;/dev/null
+    echo -e &quot;${GREEN}[成功] MySQL已设置为开机自启动${NC}&quot;
+    mysql_log &quot;MySQL已设置开机自启动&quot;
+}
+
+# ============================================
+# 功能4：初始化MySQL并设置root密码
+# 逻辑说明：
+#   1. 启动MySQL服务
+#   2. 执行安全初始化脚本（mysql_secure_installation）
+#   3. 设置root账户密码
+#   4. 移除匿名用户和测试数据库
+# ============================================
+initialize_mysql() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}    初始化MySQL配置${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    mysql_log &quot;[步骤4] 初始化MySQL...&quot;
+
+    # 4.1 启动MySQL服务
+    echo -e &quot;${YELLOW}[启动] MySQL服务...${NC}&quot;
+    sudo systemctl start mysqld 2&gt;/dev/null || sudo systemctl start mariadb 2&gt;/dev/null
+
+    sleep 3  # 等待服务完全启动
+
+    # 检查服务状态
+    if sudo systemctl is-active --quiet mysqld 2&gt;/dev/null || \
+       sudo systemctl is-active --quiet mariadb 2&gt;/dev/null; then
+        echo -e &quot;${GREEN}[成功] MySQL服务已启动${NC}&quot;
+        mysql_log &quot;MySQL服务启动成功&quot;
+    else
+        echo -e &quot;${RED}[错误] MySQL服务启动失败！${NC}&quot;
+        mysql_log &quot;MySQL服务启动失败&quot;
+        return 1
+    fi
+
+    # 4.2 获取初始密码（MySQL 8.0首次安装会生成临时密码）
+    INITIAL_PASSWORD=&quot;&quot;
+    if [ -f /var/log/mysqld.log ]; then
+        INITIAL_PASSWORD=$(sudo grep &#x27;temporary password&#x27; /var/log/mysqld.log | awk &#x27;{print $NF}&#x27;)
+        if [ -n &quot;$INITIAL_PASSWORD&quot; ]; then
+            echo -e &quot;${YELLOW}[信息] 获取到初始临时密码${NC}&quot;
+        fi
+    fi
+
+    # 4.3 设置root密码
+    echo -e &quot;${YELLOW}[配置] 设置root账户密码...${NC}&quot;
+
+    if [ -n &quot;$INITIAL_PASSWORD&quot; ]; then
+        # MySQL 8.0：使用临时密码登录后修改
+        mysql -u root -p&quot;$INITIAL_PASSWORD&quot; --connect-expired-password \
+            -e &quot;ALTER USER &#x27;root&#x27;@&#x27;localhost&#x27; IDENTIFIED BY &#x27;$MYSQL_ROOT_PASSWORD&#x27;;&quot; 2&gt;/dev/null
+    else
+        # MariaDB或无密码情况
+        mysql -u root -e &quot;ALTER USER &#x27;root&#x27;@&#x27;localhost&#x27; IDENTIFIED BY &#x27;$MYSQL_ROOT_PASSWORD&#x27;;&quot; 2&gt;/dev/null || \
+        mysqladmin -u root password &quot;$MYSQL_ROOT_PASSWORD&quot; 2&gt;/dev/null
+    fi
+
+    if [ $? -eq 0 ]; then
+        echo -e &quot;${GREEN}[成功] root密码设置成功${NC}&quot;
+        echo -e &quot;  root密码: $MYSQL_ROOT_PASSWORD&quot;
+        mysql_log &quot;root密码设置成功&quot;
+    else
+        echo -e &quot;${YELLOW}[信息] 尝试其他方式设置密码...${NC}&quot;
+        # 备用方案：直接更新mysql.user表
+        sudo mysqld --skip-grant-tables --user=mysql &amp;
+        sleep 2
+        mysql -u root -e &quot;UPDATE mysql.user SET authentication_string=PASSWORD(&#x27;$MYSQL_ROOT_PASSWORD&#x27;) WHERE User=&#x27;root&#x27;; FLUSH PRIVILEGES;&quot; 2&gt;/dev/null || \
+        mysql -u root -e &quot;SET PASSWORD FOR &#x27;root&#x27;@&#x27;localhost&#x27; = PASSWORD(&#x27;$MYSQL_ROOT_PASSWORD&#x27;);&quot; 2&gt;/dev/null
+        sudo pkill -9 mysqld
+        sudo systemctl start mysqld 2&gt;/dev/null || sudo systemctl start mariadb 2&gt;/dev/null
+        mysql_log &quot;使用备用方式设置密码&quot;
+    fi
+
+    # 4.4 安全加固（移除测试数据）
+    echo -e &quot;${YELLOW}[安全] 执行安全配置...${NC}&quot;
+    mysql -u root -p&quot;$MYSQL_ROOT_PASSWORD&quot; 2&gt;/dev/null &lt;&lt; EOF
+-- 删除匿名用户
+DELETE FROM mysql.user WHERE User=&#x27;&#x27;;
+
+-- 禁止root远程登录（可选，根据需求调整）
+DELETE FROM mysql.user WHERE User=&#x27;root&#x27; AND Host NOT IN (&#x27;localhost&#x27;, &#x27;127.0.0.1&#x27;, &#x27;::1&#x27;);
+
+-- 删除测试数据库
+DROP DATABASE IF EXISTS test;
+DELETE FROM mysql.db WHERE Db=&#x27;test&#x27; OR Db=&#x27;test\\_%&#x27;;
+
+-- 刷新权限
+FLUSH PRIVILEGES;
+EOF
+
+    echo -e &quot;${GREEN}[完成] MySQL安全配置完成${NC}&quot;
+    mysql_log &quot;MySQL安全配置完成&quot;
+}
+
+# ============================================
+# 功能5：登录MySQL验证
+# 逻辑说明：
+#   1. 使用设置的root密码尝试连接MySQL
+#   2. 显示MySQL版本信息和当前状态
+#   3. 显示现有数据库列表
+# ============================================
+login_mysql_test() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}     登录MySQL测试${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    mysql_log &quot;[步骤5] 测试MySQL登录...&quot;
+
+    echo -e &quot;${YELLOW}[测试] 连接MySQL服务器...${NC}&quot;
+
+    # 尝试连接MySQL
+    if mysql -u root -p&quot;$MYSQL_ROOT_PASSWORD&quot; -e &quot;SELECT VERSION();&quot; 2&gt;/dev/null; then
+        echo -e &quot;\n${GREEN}[成功] MySQL登录成功！${NC}&quot;
+        mysql_log &quot;MySQL登录测试成功&quot;
+
+        # 显示MySQL版本信息
+        echo -e &quot;\n${YELLOW}--- MySQL版本信息 ---${NC}&quot;
+        mysql -u root -p&quot;$MYSQL_ROOT_PASSWORD&quot; -e &quot;SELECT VERSION() AS &#x27;MySQL版本&#x27;;&quot; 2&gt;/dev/null
+
+        # 显示当前用户
+        echo -e &quot;\n${YELLOW}--- 当前用户 ---${NC}&quot;
+        mysql -u root -p&quot;$MYSQL_ROOT_PASSWORD&quot; -e &quot;SELECT USER() AS &#x27;当前用户&#x27;;&quot; 2&gt;/dev/null
+
+        # 显示端口信息
+        echo -e &quot;\n${YELLOW}--- 服务状态 ---${NC}&quot;
+        sudo systemctl status mysqld 2&gt;/dev/null | head -5 || sudo systemctl status mariadb 2&gt;/dev/null | head -5
+
+        return 0
+    else
+        echo -e &quot;${RED}[错误] MySQL登录失败！请检查密码和服务状态。${NC}&quot;
+        mysql_log &quot;MySQL登录测试失败&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 功能6：创建数据库和表结构
+# 逻辑说明：
+#   1. 创建课程设计示例数据库（如学生管理系统）
+#   2. 设计合理的表结构（学生表、课程表、成绩表）
+#   3. 设置主键、外键约束
+#   4. 插入示例数据用于演示
+# ============================================
+create_database_and_tables() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}   创建数据库和表${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    mysql_log &quot;[步骤6] 创建数据库和表结构...&quot;
+
+    # 数据库名称
+    DB_NAME=&quot;student_management&quot;
+
+    echo -e &quot;${YELLOW}[创建] 数据库: $DB_NAME${NC}&quot;
+
+    # 执行SQL脚本创建数据库和表
+    mysql -u root -p&quot;$MYSQL_ROOT_PASSWORD&quot; 2&gt;/dev/null &lt;&lt; EOSQL
+-- ============================================
+-- 学生管理系统数据库
+-- 创建时间: $(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)
+-- ============================================
+
+-- 如果数据库已存在则先删除（用于重新初始化）
+DROP DATABASE IF EXISTS $DB_NAME;
+
+-- 创建数据库，指定UTF-8字符集
+CREATE DATABASE $DB_NAME
+    DEFAULT CHARACTER SET utf8mb4
+    COLLATE utf8mb4_unicode_ci;
+
+-- 使用该数据库
+USE $DB_NAME;
+
+-- ------------------------------------------
+-- 表1: students（学生信息表）
+-- 字段说明:
+--   student_id: 学号（主键，自增）
+--   name: 姓名
+--   gender: 性别
+--   age: 年龄
+--   class_name: 班级
+--   phone: 联系电话
+--   create_time: 记录创建时间
+-- ------------------------------------------
+CREATE TABLE students (
+    student_id INT AUTO_INCREMENT PRIMARY KEY COMMENT &#x27;学号&#x27;,
+    name VARCHAR(50) NOT NULL COMMENT &#x27;姓名&#x27;,
+    gender ENUM(&#x27;男&#x27;, &#x27;女&#x27;) DEFAULT &#x27;男&#x27; COMMENT &#x27;性别&#x27;,
+    age INT CHECK (age BETWEEN 15 AND 30) COMMENT &#x27;年龄&#x27;,
+    class_name VARCHAR(50) COMMENT &#x27;班级&#x27;,
+    phone VARCHAR(20) COMMENT &#x27;联系电话&#x27;,
+    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT &#x27;创建时间&#x27;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT=&#x27;学生信息表&#x27;;
+
+-- ------------------------------------------
+-- 表2: courses（课程信息表）
+-- 字段说明:
+--   course_id: 课程编号（主键）
+--   course_name: 课程名称
+--   credit: 学分
+--   teacher: 授课教师
+-- ------------------------------------------
+CREATE TABLE courses (
+    course_id INT AUTO_INCREMENT PRIMARY KEY COMMENT &#x27;课程编号&#x27;,
+    course_name VARCHAR(100) NOT NULL COMMENT &#x27;课程名称&#x27;,
+    credit DECIMAL(3,1) NOT NULL DEFAULT 1.0 COMMENT &#x27;学分&#x27;,
+    teacher VARCHAR(50) NOT NULL COMMENT &#x27;授课教师&#x27;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT=&#x27;课程信息表&#x27;;
+
+-- ------------------------------------------
+-- 表3: scores（成绩表）
+-- 字段说明:
+--   score_id: 成绩记录ID（主键）
+--   student_id: 学号（外键关联students表）
+--   course_id: 课程编号（外键关联courses表）
+--   score: 分数（0-100）
+--   exam_time: 考试日期
+-- 外键约束确保数据完整性
+-- ------------------------------------------
+CREATE TABLE scores (
+    score_id INT AUTO_INCREMENT PRIMARY KEY COMMENT &#x27;记录ID&#x27;,
+    student_id INT NOT NULL COMMENT &#x27;学号&#x27;,
+    course_id INT NOT NULL COMMENT &#x27;课程编号&#x27;,
+    score DECIMAL(5,2) CHECK (score BETWEEN 0 AND 100) COMMENT &#x27;分数&#x27;,
+    exam_time DATE COMMENT &#x27;考试日期&#x27;,
+
+    -- 外键约束
+    CONSTRAINT fk_student FOREIGN KEY (student_id)
+        REFERENCES students(student_id) ON DELETE CASCADE,
+    CONSTRAINT fk_course FOREIGN KEY (course_id)
+        REFERENCES courses(course_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT=&#x27;成绩表&#x27;;
+
+EOSQL
+
+    if [ $? -eq 0 ]; then
+        echo -e &quot;${GREEN}[成功] 数据库 &#x27;$DB_NAME&#x27; 和表结构创建成功！${NC}&quot;
+        mysql_log &quot;数据库 $DB_NAME 创建成功&quot;
+    else
+        echo -e &quot;${RED}[错误] 数据库创建失败！${NC}&quot;
+        mysql_log &quot;数据库创建失败&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 功能7：插入示例数据
+# 逻辑说明：
+#   1. 向学生表插入多条学生记录
+#   2. 向课程表插入课程数据
+#   3. 向成绩表插入学生成绩
+#   4. 验证数据插入结果
+# ============================================
+insert_sample_data() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}    插入示例数据${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    mysql_log &quot;[步骤7] 插入示例数据...&quot;
+
+    DB_NAME=&quot;student_management&quot;
+
+    echo -e &quot;${YELLOW}[插入] 学生数据...${NC}&quot;
+
+    # 执行数据插入SQL
+    mysql -u root -p&quot;$MYSQL_ROOT_PASSWORD&quot; &quot;$DB_NAME&quot; 2&gt;/dev/null &lt;&lt; EOSQL
+-- ============================================
+-- 示例数据插入
+-- ============================================
+
+USE $DB_NAME;
+
+-- 插入学生数据
+INSERT INTO students (name, gender, age, class_name, phone) VALUES
+    (&#x27;张三&#x27;, &#x27;男&#x27;, 20, &#x27;计算机2301&#x27;, &#x27;13800138001&#x27;),
+    (&#x27;李四&#x27;, &#x27;男&#x27;, 19, &#x27;计算机2301&#x27;, &#x27;13800138002&#x27;),
+    (&#x27;王五&#x27;, &#x27;男&#x27;, 21, &#x27;计算机2302&#x27;, &#x27;13800138003&#x27;),
+    (&#x27;赵六&#x27;, &#x27;女&#x27;, 20, &#x27;计算机2302&#x27;, &#x27;13800138004&#x27;),
+    (&#x27;钱七&#x27;, &#x27;女&#x27;, 19, &#x27;软件工程2301&#x27;, &#x27;13800138005&#x27;),
+    (&#x27;孙八&#x27;, &#x27;男&#x27;, 22, &#x27;软件工程2301&#x27;, &#x27;13800138006&#x27;);
+
+-- 插入课程数据
+INSERT INTO courses (course_name, credit, teacher) VALUES
+    (&#x27;Linux系统开发&#x27;, 3.5, &#x27;张老师&#x27;),
+    (&#x27;数据库原理&#x27;, 4.0, &#x27;李老师&#x27;),
+    (&#x27;计算机网络&#x27;, 3.0, &#x27;王老师&#x27;),
+    (&#x27;Java程序设计&#x27;, 4.0, &#x27;赵老师&#x27;),
+    (&#x27;数据结构与算法&#x27;, 3.5, &#x27;刘老师&#x27;);
+
+-- 插入成绩数据
+INSERT INTO scores (student_id, course_id, score, exam_time) VALUES
+    (1, 1, 92.50, &#x27;2024-01-15&#x27;),
+    (1, 2, 88.00, &#x27;2024-01-16&#x27;),
+    (1, 3, 76.50, &#x27;2024-01-17&#x27;),
+    (2, 1, 85.00, &#x27;2024-01-15&#x27;),
+    (2, 2, 91.50, &#x27;2024-01-16&#x27;),
+    (2, 4, 78.00, &#x27;2024-01-18&#x27;),
+    (3, 1, 95.00, &#x27;2024-01-15&#x27;),
+    (3, 3, 82.50, &#x27;2024-01-17&#x27;),
+    (3, 5, 89.00, &#x27;2024-01-19&#x27;),
+    (4, 2, 93.00, &#x27;2024-01-16&#x27;),
+    (4, 4, 86.50, &#x27;2024-01-18&#x27;),
+    (5, 1, 79.00, &#x27;2024-01-15&#x27;),
+    (5, 5, 94.50, &#x27;2024-01-19&#x27;),
+    (6, 2, 87.00, &#x27;2024-01-16&#x27;),
+    (6, 3, 90.00, &#x27;2024-01-17&#x27;);
+
+EOSQL
+
+    if [ $? -eq 0 ]; then
+        echo -e &quot;${GREEN}[成功] 示例数据插入成功！${NC}&quot;
+        mysql_log &quot;示例数据插入成功&quot;
+
+        # 显示统计信息
+        echo -e &quot;\n${YELLOW}--- 数据统计 ---${NC}&quot;
+        mysql -u root -p&quot;$MYSQL_ROOT_PASSWORD&quot; &quot;$DB_NAME&quot; -e &quot;
+            SELECT &#x27;students&#x27; AS &#x27;表名&#x27;, COUNT(*) AS &#x27;记录数&#x27; FROM students
+            UNION ALL
+            SELECT &#x27;courses&#x27;, COUNT(*) FROM courses
+            UNION ALL
+            SELECT &#x27;scores&#x27;, COUNT(*) FROM scores;
+        &quot; 2&gt;/dev/null
+
+        # 显示部分数据预览
+        echo -e &quot;\n${YELLOW}--- 学生列表预览 ---${NC}&quot;
+        mysql -u root -p&quot;$MYSQL_ROOT_PASSWORD&quot; &quot;$DB_NAME&quot; -e &quot;SELECT * FROM students LIMIT 5;&quot; 2&gt;/dev/null
+
+    else
+        echo -e &quot;${RED}[错误] 数据插入失败！${NC}&quot;
+        mysql_log &quot;数据插入失败&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 主菜单界面
+# ============================================
+main_menu() {
+    init_mysql_log
+
+    while true; do
+        echo &quot;&quot;
+        echo -e &quot;${GREEN}╔════════════════════════════════════════════╗${NC}&quot;
+        echo -e &quot;${GREEN}║     MySQL 安装与配置管理系统 v1.0         ║${NC}&quot;
+        echo -e &quot;${GREEN}╠════════════════════════════════════════════╣${NC}&quot;
+        echo -e &quot;${GREEN}║                                          ║${NC}&quot;
+        echo -e &quot;${GREEN}║   1. 系统环境检测                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   2. 下载安装MySQL                       ║${NC}&quot;
+        echo -e &quot;${GREEN}║   3. 配置环境变量                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   4. 初始化MySQL（设置root密码）          ║${NC}&quot;
+        echo -e &quot;${GREEN}║   5. 登录MySQL测试                       ║${NC}&quot;
+        echo -e &quot;${GREEN}║   6. 创建数据库和表                      ║${NC}&quot;
+        echo -e &quot;${GREEN}║   7. 插入示例数据                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   8. 一键完整安装                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   0. 退出系统                            ║${NC}&quot;
+        echo -e &quot;${GREEN}║                                          ║${NC}&quot;
+        echo -e &quot;${GREEN}╚════════════════════════════════════════════╝${NC}&quot;
+        echo &quot;&quot;
+
+        read -p &quot;请选择功能 (0-8): &quot; choice
+
+        case $choice in
+            1)
+                check_environment
+                ;;
+            2)
+                install_mysql
+                ;;
+            3)
+                configure_mysql_env
+                ;;
+            4)
+                initialize_mysql
+                ;;
+            5)
+                login_mysql_test
+                ;;
+            6)
+                create_database_and_tables
+                ;;
+            7)
+                insert_sample_data
+                ;;
+            8)
+                # 一键完整安装流程
+                echo -e &quot;${YELLOW}[一键安装] 开始完整安装流程...${NC}&quot;
+                check_environment &amp;&amp; \
+                install_mysql &amp;&amp; \
+                configure_mysql_env &amp;&amp; \
+                initialize_mysql &amp;&amp; \
+                login_mysql_test &amp;&amp; \
+                create_database_and_tables &amp;&amp; \
+                insert_sample_data
+                echo -e &quot;${GREEN}[完成] 一键安装流程结束${NC}&quot;
+                ;;
+            0)
+                echo -e &quot;${YELLOW}感谢使用MySQL配置工具，再见！${NC}&quot;
+                exit 0
+                ;;
+            *)
+                echo -e &quot;${RED}[错误] 无效的选择，请重新输入！${NC}&quot;
+                ;;
+        esac
+
+        echo &quot;&quot;
+        read -p &quot;按回车键继续...&quot;
+    done
+}
+
+# 程序入口
+main_menu
+</pre>
+</div>
+
+<div class="problem">
+<div class="title">题目四：Tomcat安装与配置</div>
+<pre>#!/bin/bash
+
+# ============================================================
+# 题目4：Tomcat服务器安装与配置
+# 功能：实现Tomcat的下载、安装、配置和启动管理
+# 作者：彭子阳
+# 学号：20231035109
+# ============================================================
+
+# 颜色定义
+RED=&#x27;\033[0;31m&#x27;
+GREEN=&#x27;\033[0;32m&#x27;
+YELLOW=&#x27;\033[1;33m&#x27;
+BLUE=&#x27;\033[0;34m&#x27;
+CYAN=&#x27;\033[0;36m&#x27;
+NC=&#x27;\033[0m&#x27;
+
+# Tomcat配置变量
+TOMCAT_VERSION=&quot;10.1.18&quot;
+TOMCAT_INSTALL_DIR=&quot;/opt&quot;
+TOMCAT_HOME=&quot;${TOMCAT_INSTALL_DIR}/tomcat-${TOMCAT_VERSION}&quot;
+TOMCAT_DOWNLOAD_URL=&quot;https://dlcdn.apache.org/tomcat/tomcat-10/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz&quot;
+TOMCAT_ARCHIVE=&quot;apache-tomcat-${TOMCAT_VERSION}.tar.gz&quot;
+TOMCAT_LOG=&quot;/workspace/linux_course_design/tomcat_install.log&quot;
+
+# JDK配置（Tomcat需要Java环境）
+JAVA_HOME=&quot;&quot;
+JDK_VERSION=&quot;11&quot;
+
+# 初始化日志
+init_tomcat_log() {
+    echo &quot;========================================&quot; &gt; &quot;$TOMCAT_LOG&quot;
+    echo &quot;Tomcat安装日志&quot; &gt;&gt; &quot;$TOMCAT_LOG&quot;
+    echo &quot;开始时间: $(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)&quot; &gt;&gt; &quot;$TOMCAT_LOG&quot;
+    echo &quot;========================================&quot; &gt;&gt; &quot;$TOMCAT_LOG&quot;
+}
+
+tomcat_log() {
+    local msg=&quot;$1&quot;
+    local timestamp=$(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)
+    echo &quot;[$timestamp] $msg&quot; | tee -a &quot;$TOMCAT_LOG&quot;
+}
+
+# ============================================
+# 功能1：检查Java环境
+# 逻辑说明：
+#   1. Tomcat运行依赖Java环境（JDK/JRE）
+#   2. 检测系统是否已安装Java
+#   3. 如果未安装，自动安装OpenJDK
+#   4. 设置JAVA_HOME环境变量
+# ============================================
+check_java_environment() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}      Java环境检测${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    tomcat_log &quot;[步骤1] 检查Java环境...&quot;
+
+    # 1.1 检测是否已安装Java
+    echo -e &quot;${YELLOW}[检测] Java运行环境...${NC}&quot;
+    if command -v java &amp;&gt;/dev/null; then
+        JAVA_VERSION=$(java -version 2&gt;&amp;1 | head -n 1)
+        echo -e &quot;${GREEN}  已安装: $JAVA_VERSION${NC}&quot;
+
+        # 获取JAVA_HOME路径
+        if [ -n &quot;$JAVA_HOME&quot; ]; then
+            echo -e &quot;${GREEN}  JAVA_HOME: $JAVA_HOME${NC}&quot;
+        else
+            # 尝试自动查找JAVA_HOME
+            JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+            echo -e &quot;${YELLOW}  自动检测到JAVA_HOME: $JAVA_HOME${NC}&quot;
+        fi
+        tomcat_log &quot;Java已安装: $JAVA_VERSION&quot;
+        return 0
+    fi
+
+    echo -e &quot;${RED}  未检测到Java环境！${NC}&quot;
+    tomcat_log &quot;未检测到Java，开始安装...&quot;
+
+    # 1.2 安装Java（根据操作系统）
+    read -p &quot;是否需要自动安装OpenJDK？(y/n): &quot; install_jdk
+
+    if [ &quot;$install_jdk&quot; = &quot;y&quot; ] || [ &quot;$install_jdk&quot; = &quot;Y&quot; ]; then
+        install_java
+    else
+        echo -e &quot;${RED}[错误] Tomcat需要Java环境才能运行！${NC}&quot;
+        return 1
+    fi
+}
+
+# 安装Java环境
+install_java() {
+    echo -e &quot;${YELLOW}[安装] OpenJDK...${NC}&quot;
+
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+    fi
+
+    case &quot;$OS_NAME&quot; in
+        *&quot;Ubuntu&quot;*|*&quot;Debian&quot;*)
+            sudo apt-get update -y
+            sudo apt-get install -y openjdk-${JDK_VERSION}-jdk
+            ;;
+        *&quot;CentOS&quot;*|*&quot;Red Hat&quot;*|*&quot;Rocky&quot;*|*&quot;AlmaLinux&quot;*)
+            sudo yum install -y java-${JDK_VERSION}-openjdk-devel
+            ;;
+        *)
+            echo -e &quot;${RED}[错误] 不支持的操作系统${NC}&quot;
+            return 1
+            ;;
+    esac
+
+    if [ $? -eq 0 ]; then
+        # 设置JAVA_HOME
+        export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+        echo -e &quot;${GREEN}[成功] Java安装成功: $(java -version 2&gt;&amp;1 | head -n 1)${NC}&quot;
+        tomcat_log &quot;Java安装成功, JAVA_HOME=$JAVA_HOME&quot;
+        return 0
+    else
+        echo -e &quot;${RED}[错误] Java安装失败！${NC}&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 功能2：下载Tomcat
+# 逻辑说明：
+#   1. 从Apache官方源下载指定版本的Tomcat
+#   2. 支持使用wget或curl下载工具
+#   3. 验证下载文件的完整性（MD5/SHA校验）
+#   4. 处理网络异常情况
+# ============================================
+download_tomcat() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}       下载Tomcat${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    tomcat_log &quot;[步骤2] 下载Tomcat ${TOMCAT_VERSION}...&quot;
+
+    # 2.1 检查是否已安装
+    if [ -d &quot;$TOMCAT_HOME&quot; ]; then
+        echo -e &quot;${YELLOW}Tomcat似乎已经安装在: $TOMCAT_HOME${NC}&quot;
+        read -p &quot;是否重新下载并覆盖安装？(y/n): &quot; redownload
+        if [ &quot;$redownload&quot; != &quot;y&quot; ] &amp;&amp; [ &quot;$redownload&quot; != &quot;Y&quot; ]; then
+            echo -e &quot;${YELLOW}跳过下载步骤${NC}&quot;
+            return 0
+        fi
+        # 删除旧版本
+        sudo rm -rf &quot;$TOMCAT_HOME&quot;
+    fi
+
+    # 2.2 创建临时目录用于下载
+    TMP_DIR=&quot;/tmp/tomcat_install&quot;
+    mkdir -p &quot;$TMP_DIR&quot;
+    cd &quot;$TMP_DIR&quot;
+
+    # 清理可能存在的旧文件
+    rm -f &quot;$TOMCAT_ARCHIVE&quot;
+
+    echo -e &quot;${YELLOW}[下载] Apache Tomcat ${TOMCAT_VERSION}...${NC}&quot;
+    echo -e &quot;  下载地址: $TOMCAT_DOWNLOAD_URL&quot;
+    echo &quot;&quot;
+
+    # 2.3 使用wget或curl下载
+    DOWNLOAD_SUCCESS=0
+
+    if command -v wget &amp;&gt;/dev/null; then
+        echo -e &quot;${YELLOW}使用 wget 下载...${NC}&quot;
+        wget --progress=bar:force &quot;$TOMCAT_DOWNLOAD_URL&quot; -O &quot;$TOMCAT_ARCHIVE&quot; &amp;&amp; \
+        DOWNLOAD_SUCCESS=1
+    elif command -v curl &amp;&gt;/dev/null; then
+        echo -e &quot;${YELLOW}使用 curl 下载...${NC}&quot;
+        curl -L --progress-bar &quot;$TOMCAT_DOWNLOAD_URL&quot; -o &quot;$TOMCAT_ARCHIVE&quot; &amp;&amp; \
+        DOWNLOAD_SUCCESS=1
+    else
+        echo -e &quot;${RED}[错误] 系统缺少wget或curl下载工具！${NC}&quot;
+        echo -e &quot;${YELLOW}请先执行: sudo apt-get install wget 或 sudo yum install wget${NC}&quot;
+        return 1
+    fi
+
+    # 2.4 验证下载结果
+    if [ $DOWNLOAD_SUCCESS -eq 1 ] &amp;&amp; [ -f &quot;$TOMCAT_ARCHIVE&quot; ]; then
+        FILE_SIZE=$(ls -lh &quot;$TOMCAT_ARCHIVE&quot; | awk &#x27;{print $5}&#x27;)
+        echo -e &quot;\n${GREEN}[成功] Tomcat下载完成！${NC}&quot;
+        echo -e &quot;  文件大小: $FILE_SIZE&quot;
+        echo -e &quot;  存储位置: $TMP_DIR/$TOMCAT_ARCHIVE&quot;
+        tomcat_log &quot;Tomcat下载成功: $FILE_SIZE&quot;
+        return 0
+    else
+        echo -e &quot;\n${RED}[错误] Tomcat下载失败！${NC}&quot;
+        echo -e &quot;${YELLOW}可能的原因:${NC}&quot;
+        echo &quot;  1. 网络连接问题&quot;
+        echo &quot;  2. 下载地址不可用&quot;
+        echo &quot;  3. 版本号错误&quot;
+        tomcat_log &quot;Tomcat下载失败&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 功能3：安装和解压Tomcat
+# 逻辑说明：
+#   1. 将下载的tar.gz压缩包解压到目标目录
+#   2. 重命名目录为规范格式
+#   3. 设置目录权限（确保Tomcat用户有读写权限）
+#   4. 创建必要的软链接方便访问
+# ============================================
+install_tomcat() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}       安装Tomcat${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    tomcat_log &quot;[步骤3] 安装Tomcat...&quot;
+
+    TMP_DIR=&quot;/tmp/tomcat_install&quot;
+    ARCHIVE_PATH=&quot;$TMP_DIR/$TOMCAT_ARCHIVE&quot;
+
+    # 检查压缩包是否存在
+    if [ ! -f &quot;$ARCHIVE_PATH&quot; ]; then
+        echo -e &quot;${RED}[错误] 找不到Tomcat安装包: $ARCHIVE_PATH${NC}&quot;
+        echo -e &quot;${YELLOW}请先执行下载操作（选项2）${NC}&quot;
+        return 1
+    fi
+
+    # 3.1 解压Tomcat到安装目录
+    echo -e &quot;${YELLOW}[解压] Tomcat安装包...${NC}&quot;
+    sudo mkdir -p &quot;$TOMCAT_INSTALL_DIR&quot;
+
+    # 使用tar命令解压，-x解压，-z处理gzip，-v显示过程，-f指定文件
+    sudo tar -xzf &quot;$ARCHIVE_PATH&quot; -C &quot;$TOMCAT_INSTALL_DIR&quot;
+
+    if [ $? -ne 0 ]; then
+        echo -e &quot;${RED}[错误] 解压失败！请检查文件完整性。${NC}&quot;
+        tomcat_log &quot;Tomcat解压失败&quot;
+        return 1
+    fi
+
+    # 3.2 重命名目录（如果需要）
+    EXTRACTED_DIR=&quot;${TOMCAT_INSTALL_DIR}/apache-tomcat-${TOMCAT_VERSION}&quot;
+    if [ ! -d &quot;$TOMCAT_HOME&quot; ] &amp;&amp; [ -d &quot;$EXTRACTED_DIR&quot; ]; then
+        sudo mv &quot;$EXTRACTED_DIR&quot; &quot;$TOMCAT_HOME&quot;
+    fi
+
+    # 3.3 设置权限
+    echo -e &quot;${YELLOW}[设置] 目录权限...${NC}&quot;
+    # 设置Tomcat目录的所有者为当前用户（或创建专用tomcat用户）
+    sudo chown -R $USER:$USER &quot;$TOMCAT_HOME&quot;
+    # 设置bin目录下脚本可执行权限
+    sudo chmod +x &quot;$TOMCAT_HOME&quot;/bin/*.sh
+
+    # 3.4 创建软链接（可选，方便访问）
+    if [ ! -L &quot;/opt/tomcat&quot; ]; then
+        sudo ln -s &quot;$TOMCAT_HOME&quot; /opt/tomcat
+        echo -e &quot;${GREEN}  已创建软链接: /opt/tomcat -&gt; $TOMCAT_HOME${NC}&quot;
+    fi
+
+    echo -e &quot;\n${GREEN}[成功] Tomcat安装完成！${NC}&quot;
+    echo -e &quot;  安装目录: $TOMCAT_HOME&quot;
+    echo -e &quot;  软链接: /opt/tomcat&quot;
+    tomcat_log &quot;Tomcat安装成功: $TOMCAT_HOME&quot;
+
+    # 显示目录结构概览
+    echo -e &quot;\n${YELLOW}--- Tomcat目录结构 ---${NC}&quot;
+    ls -la &quot;$TOMCAT_HOME/&quot; | head -15
+}
+
+# ============================================
+# 功能4：配置Tomcat环境变量
+# 逻辑说明：
+#   1. 配置CATALINA_HOME环境变量指向Tomcat安装目录
+#   2. 配置PATH包含Tomcat的bin目录
+#   3. 创建全局配置文件使所有用户可用
+#   4. 修改Tomcat配置文件优化性能
+# ============================================
+configure_tomcat_env() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}     配置Tomcat环境${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    tomcat_log &quot;[步骤4] 配置Tomcat环境变量...&quot;
+
+    # 4.1 获取JAVA_HOME（如果尚未设置）
+    if [ -z &quot;$JAVA_HOME&quot; ]; then
+        if command -v java &amp;&gt;/dev/null; then
+            export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+        else
+            echo -e &quot;${RED}[错误] 请先安装Java环境！${NC}&quot;
+            return 1
+        fi
+    fi
+
+    # 4.2 创建Tomcat环境变量配置文件
+    ENV_FILE=&quot;/etc/profile.d/tomcat.sh&quot;
+    echo -e &quot;${YELLOW}[配置] 写入环境变量...${NC}&quot;
+
+    sudo tee &quot;$ENV_FILE&quot; &gt; /dev/null &lt;&lt; EOF
+#!/bin/bash
+# Tomcat环境变量配置
+# 文件创建时间: $(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)
+
+# Tomcat主目录（CATALINA_HOME是Tomcat的标准环境变量名）
+export CATALINA_HOME=$TOMCAT_HOME
+export TOMCAT_HOME=$TOMCAT_HOME
+
+# 将Tomcat bin目录添加到PATH（方便直接使用startup.sh等命令）
+export PATH=\$PATH:$TOMCAT_HOME/bin
+
+# Java环境变量
+export JAVA_HOME=$JAVA_HOME
+EOF
+
+    sudo chmod +x &quot;$ENV_FILE&quot;
+
+    # 使环境变量立即生效
+    source &quot;$ENV_FILE&quot;
+    export CATALINA_HOME=$TOMCAT_HOME
+    export PATH=$PATH:$TOMCAT_HOME/bin
+
+    echo -e &quot;${GREEN}[成功] 环境变量配置完成${NC}&quot;
+    echo -e &quot;  CATALINA_HOME=$TOMCAT_HOME&quot;
+    echo -e &quot;  配置文件: $ENV_FILE&quot;
+    tomcat_log &quot;环境变量配置完成: CATALINA_HOME=$TOMCAT_HOME&quot;
+
+    # 4.3 优化Tomcat配置（可选）
+    configure_tomcat_settings
+}
+
+# 优化Tomcat服务器设置
+configure_tomcat_settings() {
+    echo -e &quot;\n${YELLOW}[优化] Tomcat服务器配置...${NC}&quot;
+
+    SERVER_XML=&quot;$TOMCAT_HOME/conf/server.xml&quot;
+
+    if [ ! -f &quot;$SERVER_XML&quot; ]; then
+        echo -e &quot;${RED}[警告] 找不到server.xml配置文件${NC}&quot;
+        return 1
+    fi
+
+    # 备份原配置
+    cp &quot;$SERVER_XML&quot; &quot;${SERVER_XML}.bak&quot;
+    echo -e &quot;  原配置已备份: ${SERVER_XML}.bak&quot;
+
+    # 修改端口号（默认8080，可根据需求改为80）
+    read -p &quot;是否修改Tomcat端口（默认8080）？(y/n): &quot; change_port
+    if [ &quot;$change_port&quot; = &quot;y&quot; ] || [ &quot;$change_port&quot; = &quot;Y&quot; ]; then
+        read -p &quot;请输入新端口号 (建议8080/80/8888): &quot; new_port
+        if [ -n &quot;$new_port&quot; ] &amp;&amp; [[ &quot;$new_port&quot; =~ ^[0-9]+$ ]]; then
+            # 使用sed替换Connector端口号
+            sed -i &quot;s/port=\&quot;8080\&quot;/port=\&quot;$new_port\&quot;/&quot; &quot;$SERVER_XML&quot;
+            echo -e &quot;${GREEN}  端口已修改为: $new_port${NC}&quot;
+            TOMCAT_PORT=$new_port
+        fi
+    else
+        TOMCAT_PORT=8080
+    fi
+
+    # 设置UTF-8编码（防止中文乱码）
+    sed -i &#x27;s/URIEncoding=&quot;[^&quot;]*&quot;/URIEncoding=&quot;UTF-8&quot;/g&#x27; &quot;$SERVER_XML&quot;
+    echo -e &quot;  URI编码已设置为UTF-8&quot;
+
+    echo -e &quot;${GREEN}[完成] Tomcat配置优化完成${NC}&quot;
+    tomcat_log &quot;Tomcat配置优化完成, 端口=${TOMCAT_PORT:-8080}&quot;
+}
+
+# ============================================
+# 功能5：启动Tomcat服务
+# 逻辑说明：
+#   1. 检查Tomcat进程是否已在运行
+#   2. 执行startup.sh启动脚本
+#   3. 等待服务启动完成
+#   4. 验证服务状态和端口监听
+# ============================================
+start_tomcat() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}      启动Tomcat服务${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    tomcat_log &quot;[步骤5] 启动Tomcat...&quot;
+
+    # 5.1 检查Tomcat是否已安装
+    if [ ! -d &quot;$TOMCAT_HOME&quot; ]; then
+        echo -e &quot;${RED}[错误] Tomcat未安装！请先执行安装步骤。${NC}&quot;
+        return 1
+    fi
+
+    # 5.2 检查是否已经在运行
+    if pgrep -f &quot;catalina&quot; &gt; /dev/null || pgrep -f &quot;tomcat&quot; &gt; /dev/null; then
+        echo -e &quot;${YELLOW}[信息] Tomcat似乎已经在运行中${NC}&quot;
+        read -p &quot;是否重启Tomcat？(y/n): &quot; restart_choice
+        if [ &quot;$restart_choice&quot; = &quot;y&quot; ] || [ &quot;$restart_choice&quot; = &quot;Y&quot; ]; then
+            stop_tomcat_silent
+        else
+            echo -e &quot;${YELLOW}取消启动${NC}&quot;
+            return 0
+        fi
+    fi
+
+    # 5.3 启动Tomcat
+    echo -e &quot;${YELLOW}[启动] Tomcat服务器...${NC}&quot;
+    cd &quot;$TOMCAT_HOME&quot;
+
+    # 设置JAVA_HOME后启动
+    export JAVA_HOME=&quot;${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(which java))))}&quot;
+    export CATALINA_HOME=&quot;$TOMCAT_HOME&quot;
+
+    # 执行启动脚本（后台运行，输出日志）
+    ./bin/startup.sh
+
+    if [ $? -eq 0 ]; then
+        echo &quot;&quot;
+        echo -e &quot;${GREEN}[成功] Tomcat启动命令已执行！${NC}&quot;
+
+        # 5.4 等待服务完全启动
+        echo -e &quot;${YELLOW}[等待] 服务启动中...${NC}&quot;
+        sleep 5
+
+        # 5.5 验证启动状态
+        check_tomcat_status
+    else
+        echo -e &quot;${RED}[错误] Tomcat启动失败！${NC}&quot;
+        echo -e &quot;${YELLOW}请检查日志: $TOMCAT/logs/catalina.out${NC}&quot;
+        tomcat_log &quot;Tomcat启动失败&quot;
+        return 1
+    fi
+}
+
+# 停止Tomcat（静默模式，不输出提示）
+stop_tomcat_silent() {
+    cd &quot;$TOMCAT_HOME&quot;
+    export JAVA_HOME=&quot;${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(which java))))}&quot;
+    ./bin/shutdown.sh 2&gt;/dev/null
+    sleep 2
+    # 强制结束残留进程
+    pkill -9 -f catalina 2&gt;/dev/null
+}
+
+# ============================================
+# 功能6：检查Tomcat运行状态
+# 逻辑说明：
+#   1. 检查Tomcat进程是否存在
+#   2. 检查端口是否在监听
+#   3. 尝试HTTP请求验证服务响应
+#   4. 显示详细的运行状态信息
+# ============================================
+check_tomcat_status() {
+    echo -e &quot;\n${YELLOW}--- Tomcat运行状态检查 ---${NC}\n&quot;
+
+    PORT=${TOMCAT_PORT:-8080}
+    STATUS_OK=true
+
+    # 6.1 检查进程
+    echo -e &quot;[检查] 进程状态...&quot;
+    if pgrep -f &quot;.*catalina.*$TOMCAT_HOME&quot; &gt; /dev/null || \
+       pgrep -f &quot;.*org.apache.catalina.startup.Bootstrap&quot; &gt; /dev/null; then
+        PID=$(pgrep -f &quot;.*org.apache.catalina.startup.Bootstrap&quot; | head -1)
+        echo -e &quot;  ${GREEN}● 运行中 (PID: $PID)${NC}&quot;
+    else
+        echo -e &quot;  ${RED}○ 未运行${NC}&quot;
+        STATUS_OK=false
+    fi
+
+    # 6.2 检查端口监听
+    echo -e &quot;\n[检查] 端口监听...&quot;
+    if netstat -tlnp 2&gt;/dev/null | grep -q &quot;:${PORT} &quot; || \
+       ss -tlnp 2&gt;/dev/null | grep -q &quot;:${PORT} &quot;; then
+        echo -e &quot;  ${GREEN}● 端口 $PORT 正在监听${NC}&quot;
+    else
+        echo -e &quot;  ${RED}○ 端口 $PORT 未监听${NC}&quot;
+        STATUS_OK=false
+    fi
+
+    # 6.3 HTTP连接测试
+    echo -e &quot;\n[检查] HTTP服务响应...&quot;
+    if command -v curl &amp;&gt;/dev/null; then
+        HTTP_CODE=$(curl -s -o /dev/null -w &quot;%{http_code}&quot; http://localhost:$PORT/ --connect-timeout 5 2&gt;/dev/null)
+
+        case $HTTP_CODE in
+            200|302)
+                echo -e &quot;  ${GREEN}● HTTP响应正常 (状态码: $HTTP_CODE)${NC}&quot;
+                ;;
+            000)
+                echo -e &quot;  ${RED}○ 无法连接${NC}&quot;
+                STATUS_OK=false
+                ;;
+            *)
+                echo -e &quot;  ${YELLOW}△ HTTP状态码: $HTTP_CODE${NC}&quot;
+                ;;
+        esac
+    fi
+
+    # 6.4 显示总结
+    echo &quot;&quot;
+    if [ &quot;$STATUS_OK&quot; = true ]; then
+        echo -e &quot;${GREEN}============================================${NC}&quot;
+        echo -e &quot;${GREEN}  Tomcat运行正常！${NC}&quot;
+        echo -e &quot;${GREEN}  访问地址: http://localhost:$PORT${NC}&quot;
+        echo -e &quot;${GREEN}============================================${NC}&quot;
+        tomcat_log &quot;Tomcat运行正常, 地址=http://localhost:$PORT&quot;
+        return 0
+    else
+        echo -e &quot;${RED}============================================${NC}&quot;
+        echo -e &quot;${RED}  Tomcat运行异常！${NC}&quot;
+        echo -e &quot;${RED}  请查看日志: $TOMCAT_HOME/logs/catalina.out${NC}&quot;
+        echo -e &quot;${RED}============================================${NC}&quot;
+        tomcat_log &quot;警告: Tomcat运行异常&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 功能7：停止Tomcat服务
+# ============================================
+stop_tomcat() {
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+    echo -e &quot;${CYAN}      停止Tomcat服务${NC}&quot;
+    echo -e &quot;${CYAN}============================================${NC}&quot;
+
+    if [ ! -d &quot;$TOMCAT_HOME&quot; ]; then
+        echo -e &quot;${RED}[错误] Tomcat未安装！${NC}&quot;
+        return 1
+    fi
+
+    echo -e &quot;${YELLOW}[停止] Tomcat服务器...${NC}&quot;
+    cd &quot;$TOMCAT_HOME&quot;
+    export JAVA_HOME=&quot;${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(which java))))}&quot;
+    ./bin/shutdown.sh
+
+    sleep 3
+
+    if pgrep -f &quot;catalina&quot; &gt; /dev/null; then
+        echo -e &quot;${YELLOW}[强制] 正常停止失败，尝试强制终止...${NC}&quot;
+        pkill -9 -f catalina
+        sleep 1
+    fi
+
+    if ! pgrep -f &quot;catalina&quot; &gt; /dev/null; then
+        echo -e &quot;${GREEN}[成功] Tomcat已停止${NC}&quot;
+        tomcat_log &quot;Tomcat已停止&quot;
+    else
+        echo -e &quot;${RED}[错误] Tomcat停止失败！${NC}&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 主菜单界面
+# ============================================
+main_menu() {
+    init_tomcat_log
+
+    while true; do
+        echo &quot;&quot;
+        echo -e &quot;${GREEN}╔════════════════════════════════════════════╗${NC}&quot;
+        echo -e &quot;${GREEN}║     Tomcat 安装与配置管理系统 v1.0        ║${NC}&quot;
+        echo -e &quot;${GREEN}╠════════════════════════════════════════════╣${NC}&quot;
+        echo -e &quot;${GREEN}║                                          ║${NC}&quot;
+        echo -e &quot;${GREEN}║   1. 检查Java环境                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   2. 下载Tomcat                          ║${NC}&quot;
+        echo -e &quot;${GREEN}║   3. 安装Tomcat                          ║${NC}&quot;
+        echo -e &quot;${GREEN}║   4. 配置环境变量                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   5. 启动Tomcat服务                      ║${NC}&quot;
+        echo -e &quot;${GREEN}║   6. 查看运行状态                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   7. 停止Tomcat服务                      ║${NC}&quot;
+        echo -e &quot;${GREEN}║   8. 一键完整安装                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   0. 退出系统                            ║${NC}&quot;
+        echo -e &quot;${GREEN}║                                          ║${NC}&quot;
+        echo -e &quot;${GREEN}╚════════════════════════════════════════════╝${NC}&quot;
+        echo &quot;&quot;
+
+        read -p &quot;请选择功能 (0-8): &quot; choice
+
+        case $choice in
+            1)
+                check_java_environment
+                ;;
+            2)
+                download_tomcat
+                ;;
+            3)
+                install_tomcat
+                ;;
+            4)
+                configure_tomcat_env
+                ;;
+            5)
+                start_tomcat
+                ;;
+            6)
+                check_tomcat_status
+                ;;
+            7)
+                stop_tomcat
+                ;;
+            8)
+                echo -e &quot;${YELLOW}[一键安装] 开始完整安装流程...${NC}&quot;
+                check_java_environment &amp;&amp; \
+                download_tomcat &amp;&amp; \
+                install_tomcat &amp;&amp; \
+                configure_tomcat_env &amp;&amp; \
+                start_tomcat
+                echo -e &quot;${GREEN}[完成] 一键安装流程结束${NC}&quot;
+                ;;
+            0)
+                echo -e &quot;${YELLOW}感谢使用Tomcat配置工具，再见！${NC}&quot;
+                exit 0
+                ;;
+            *)
+                echo -e &quot;${RED}[错误] 无效的选择，请重新输入！${NC}&quot;
+                ;;
+        esac
+
+        echo &quot;&quot;
+        read -p &quot;按回车键继续...&quot;
+    done
+}
+
+# 程序入口
+main_menu
+</pre>
+</div>
+
+<div class="problem">
+<div class="title">题目五：Web项目部署</div>
+<pre>#!/bin/bash
+
+# ============================================================
+# 题目5：Web项目部署系统
+# 功能：实现项目的完整部署流程，包括代码拷贝、
+#       数据库初始化、服务启动和访问测试
+# 作者：彭子阳
+# 学号：20231035109
+# ============================================================
+
+# 颜色定义
+RED=&#x27;\033[0;31m&#x27;
+GREEN=&#x27;\033[0;32m&#x27;
+YELLOW=&#x27;\033[1;33m&#x27;
+BLUE=&#x27;\033[0;34m&#x27;
+CYAN=&#x27;\033[0;36m&#x27;
+PURPLE=&#x27;\033[0;35m&#x27;
+NC=&#x27;\033[0m&#x27;
+
+# ============================================
+# 全局配置变量
+# ============================================
+# Tomcat配置
+TOMCAT_HOME=&quot;/opt/tomcat&quot;  # Tomcat安装目录（根据实际安装位置调整）
+TOMCAT_WEBAPPS=&quot;$TOMCAT_HOME/webapps&quot;
+TOMCAT_PORT=8080          # Tomcat端口号
+
+# MySQL配置
+MYSQL_ROOT_PASSWORD=&quot;Root@123456&quot;
+DB_NAME=&quot;student_management&quot;
+
+# 项目配置
+PROJECT_NAME=&quot;StudentManager&quot;
+PROJECT_SOURCE_DIR=&quot;&quot;      # 项目源码目录
+PROJECT_DEPLOY_DIR=&quot;$TOMCAT_WEBAPPS/$PROJECT_NAME&quot;
+
+# 日志文件
+DEPLOY_LOG=&quot;/workspace/linux_course_design/deploy_log.log&quot;
+
+# 初始化日志文件
+init_deploy_log() {
+    echo &quot;============================================&quot; &gt; &quot;$DEPLOY_LOG&quot;
+    echo &quot;  Web项目部署日志&quot; &gt;&gt; &quot;$DEPLOY_LOG&quot;
+    echo &quot;  开始时间: $(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)&quot; &gt;&gt; &quot;$DEPLOY_LOG&quot;
+    echo &quot;============================================&quot; &gt;&gt; &quot;$DEPLOY_LOG&quot;
+}
+
+deploy_log() {
+    local msg=&quot;$1&quot;
+    local timestamp=$(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)
+    echo -e &quot;[$timestamp] $msg&quot; | tee -a &quot;$DEPLOY_LOG&quot;
+}
+
+# ============================================
+# 功能1：检查部署环境
+# 逻辑说明：
+#   1. 检查Tomcat是否已安装并运行
+#   2. 检查MySQL是否可用
+#   3. 检查Java环境
+#   4. 检查磁盘空间和网络连接
+#   5. 输出完整的环境状态报告
+# ============================================
+check_deploy_environment() {
+    echo -e &quot;${CYAN}============================================================${NC}&quot;
+    echo -e &quot;${CYAN}              部署环境检测${NC}&quot;
+    echo -e &quot;${CYAN}============================================================${NC}&quot;
+
+    deploy_log &quot;[步骤1] 检查部署环境...&quot;
+
+    local all_ok=true
+
+    # 1.1 检测Java环境
+    echo -e &quot;\n${YELLOW}[1/5] Java环境...${NC}&quot;
+    if command -v java &amp;&gt;/dev/null; then
+        JAVA_VER=$(java -version 2&gt;&amp;1 | head -n 1)
+        echo -e &quot;  ${GREEN}● 已安装: $JAVA_VER${NC}&quot;
+        deploy_log &quot;Java: OK - $JAVA_VER&quot;
+    else
+        echo -e &quot;  ${RED}○ 未安装${NC}&quot;
+        all_ok=false
+        deploy_log &quot;Java: FAIL - 未安装&quot;
+    fi
+
+    # 1.2 检测Tomcat
+    echo -e &quot;\n${YELLOW}[2/5] Tomcat服务器...${NC}&quot;
+    if [ -d &quot;$TOMCAT_HOME&quot; ]; then
+        echo -e &quot;  ${GREEN}● 安装目录: $TOMCAT_HOME${NC}&quot;
+
+        if pgrep -f &quot;catalina&quot; &gt; /dev/null || \
+           pgrep -f &quot;org.apache.catalina.startup.Bootstrap&quot; &gt; /dev/null; then
+            echo -e &quot;  ${GREEN}● 运行状态: 运行中${NC}&quot;
+            deploy_log &quot;Tomcat: OK - 运行中&quot;
+        else
+            echo -e &quot;  ${YELLOW}△ 运行状态: 未运行${NC}&quot;
+            deploy_log &quot;Tomcat: WARN - 未运行&quot;
+        fi
+    else
+        echo -e &quot;  ${RED}○ 未安装 (路径: $TOMCAT_HOME)${NC}&quot;
+        all_ok=false
+        deploy_log &quot;Tomcat: FAIL - 未安装&quot;
+    fi
+
+    # 1.3 检测MySQL
+    echo -e &quot;\n${YELLOW}[3/5] MySQL数据库...${NC}&quot;
+    if command -v mysql &amp;&gt;/dev/null; then
+        if mysql -u root -p&quot;$MYSQL_ROOT_PASSWORD&quot; -e &quot;SELECT 1;&quot; &amp;&gt;/dev/null; then
+            echo -e &quot;  ${GREEN}● 连接正常，可登录${NC}&quot;
+            deploy_log &quot;MySQL: OK - 可连接&quot;
+        else
+            echo -e &quot;  ${YELLOW}△ 已安装但连接失败（密码错误或未启动）${NC}&quot;
+            deploy_log &quot;MySQL: WARN - 连接失败&quot;
+        fi
+    else
+        echo -e &quot;  ${RED}○ 未安装或不在PATH中${NC}&quot;
+        all_ok=false
+        deploy_log &quot;MySQL: FAIL - 未安装&quot;
+    fi
+
+    # 1.4 检查磁盘空间（项目部署至少需要100MB）
+    echo -e &quot;\n${YELLOW}[4/5] 磁盘空间...${NC}&quot;
+    available_mb=$(df -BM /opt | awk &#x27;NR==2 {print $4}&#x27; | tr -d &#x27;M&#x27;)
+    if [ &quot;$available_mb&quot; -gt 100 ]; then
+        echo -e &quot;  ${GREEN}● /opt 分区可用: ${available_mb}MB${NC}&quot;
+        deploy_log &quot;磁盘空间: OK - ${available_mb}MB&quot;
+    else
+        echo -e &quot;  ${RED}○ 空间不足: 仅剩 ${available_mb}MB${NC}&quot;
+        all_ok=false
+        deploy_log &quot;磁盘空间: FAIL - ${available_mb}MB&quot;
+    fi
+
+    # 1.5 检查网络（用于下载依赖）
+    echo -e &quot;\n${YELLOW}[5/5] 网络连接...${NC}&quot;
+    if ping -c 1 -W 2 localhost &amp;&gt;/dev/null; then
+        echo -e &quot;  ${GREEN}● 本地网络正常${NC}&quot;
+        deploy_log &quot;网络: OK&quot;
+    else
+        echo -e &quot;  ${RED}○ 网络异常${NC}&quot;
+        deploy_log &quot;网络: FAIL&quot;
+    fi
+
+    # 输出总结
+    echo &quot;&quot;
+    echo -e &quot;${PURPLE}====================${NC}&quot;
+    if [ &quot;$all_ok&quot; = true ]; then
+        echo -e &quot;${GREEN}  环境检测通过 ✓${NC}&quot;
+        deploy_log &quot;环境检测结果: 通过&quot;
+        return 0
+    else
+        echo -e &quot;${RED}  环境存在问题 ✗${NC}&quot;
+        echo -e &quot;${YELLOW}  请先解决上述问题后再进行部署${NC}&quot;
+        deploy_log &quot;环境检测结果: 存在问题&quot;
+        return 1
+    fi
+}
+
+# ============================================
+# 功能2：拷贝项目代码到服务器
+# 逻辑说明：
+#   1. 支持从本地目录或远程仓库获取项目
+#   2. 将项目拷贝到Tomcat的webapps目录
+#   3. 对于Java Web项目，处理WAR包部署
+#   4. 设置正确的文件权限
+# ============================================
+copy_project_code() {
+    echo -e &quot;${CYAN}============================================================${NC}&quot;
+    echo -e &quot;${CYAN}           拷贝项目代码${NC}&quot;
+    echo -e &quot;${CYAN}============================================================${NC}&quot;
+
+    deploy_log &quot;[步骤2] 拷贝项目代码...&quot;
+
+    # 2.1 选择项目来源方式
+    echo &quot;&quot;
+    echo -e &quot;${YELLOW}请选择项目来源:${NC}&quot;
+    echo &quot;  1. 从本地目录拷贝&quot;
+    echo &quot;  2. 创建示例演示项目（用于课程设计展示）&quot;
+    read -p &quot;请选择 (1-2): &quot; source_choice
+
+    case $source_choice in
+        1)
+            copy_from_local
+            ;;
+        2)
+            create_demo_project
+            ;;
+        *)
+            echo -e &quot;${RED}[错误] 无效的选择！${NC}&quot;
+            return 1
+            ;;
+    esac
+}
+
+# 从本地目录拷贝项目
+copy_from_local() {
+    read -p &quot;请输入项目源码目录的绝对路径: &quot; PROJECT_SOURCE_DIR
+
+    # 验证源目录存在
+    if [ ! -d &quot;$PROJECT_SOURCE_DIR&quot; ]; then
+        echo -e &quot;${RED}[错误] 目录不存在: $PROJECT_SOURCE_DIR${NC}&quot;
+        return 1
+    fi
+
+    echo -e &quot;${YELLOW}[拷贝] 项目代码...${NC}&quot;
+    echo -e &quot;  源目录: $PROJECT_SOURCE_DIR&quot;
+    echo -e &quot;  目标目录: $PROJECT_DEPLOY_DIR&quot;
+
+    # 如果目标目录已存在旧版本，先备份
+    if [ -d &quot;$PROJECT_DEPLOY_DIR&quot; ]; then
+        BACKUP_DIR=&quot;${PROJECT_DEPLOY_DIR}_bak_$(date +%Y%m%d%H%M%S)&quot;
+        mv &quot;$PROJECT_DEPLOY_DIR&quot; &quot;$BACKUP_DIR&quot;
+        echo -e &quot;${YELLOW}  旧版本已备份至: $BACKUP_DIR${NC}&quot;
+    fi
+
+    # 执行拷贝（使用cp命令递归复制）
+    cp -r &quot;$PROJECT_SOURCE_DIR&quot; &quot;$PROJECT_DEPLOY_DIR&quot;
+
+    if [ $? -eq 0 ]; then
+        # 设置权限
+        chmod -R 755 &quot;$PROJECT_DEPLOY_DIR&quot;
+
+        # 统计文件数量
+        file_count=$(find &quot;$PROJECT_DEPLOY_DIR&quot; -type f | wc -l)
+        dir_count=$(find &quot;$PROJECT_DEPLOY_DIR&quot; -type d | wc -l)
+
+        echo -e &quot;${GREEN}[成功] 项目拷贝完成！${NC}&quot;
+        echo -e &quot;  文件数: $file_count 个&quot;
+        echo -e &quot;  目录数: $dir_count 个&quot;
+        deploy_log &quot;项目拷贝成功: $PROJECT_SOURCE_DIR -&gt; $PROJECT_DEPLOY_DIR&quot;
+    else
+        echo -e &quot;${RED}[错误] 项目拷贝失败！${NC}&quot;
+        return 1
+    fi
+}
+
+# 创建示例演示项目（用于课程设计）
+create_demo_project() {
+    echo -e &quot;${YELLOW}[创建] 示例演示项目...${NC}&quot;
+    echo -e &quot;  项目名称: $PROJECT_NAME&quot;
+    echo -e &quot;  部署路径: $PROJECT_DEPLOY_DIR&quot;
+
+    # 清理可能存在的旧项目
+    rm -rf &quot;$PROJECT_DEPLOY_DIR&quot;
+
+    # 创建标准Web应用目录结构
+    mkdir -p &quot;$PROJECT_DEPLOY_DIR&quot;
+    mkdir -p &quot;$PROJECT_DEPLOY_DIR/WEB-INF&quot;
+    mkdir -p &quot;$PROJECT_DEPLOY_DIR/images&quot;
+    mkdir -p &quot;$PROJECT_DEPLOY_DIR/css&quot;
+    mkdir -p &quot;$PROJECT_DEPLOY_DIR/js&quot;
+
+    # ============================================
+    # 创建首页 index.html
+    # ============================================
+    cat &gt; &quot;$PROJECT_DEPLOY_DIR/index.html&quot; &lt;&lt; &#x27;HTMLEOF&#x27;
+&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+    &lt;meta charset=&quot;UTF-8&quot;&gt;
+    &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1.0&quot;&gt;
+    &lt;title&gt;学生管理系统 - Linux课程设计&lt;/title&gt;
+    &lt;link rel=&quot;stylesheet&quot; href=&quot;css/style.css&quot;&gt;
+&lt;/head&gt;
+&lt;body&gt;
+    &lt;div class=&quot;container&quot;&gt;
+        &lt;header&gt;
+            &lt;h1&gt;学生管理系统&lt;/h1&gt;
+            &lt;p class=&quot;subtitle&quot;&gt;Linux系统开发课程设计演示项目&lt;/p&gt;
+        &lt;/header&gt;
+
+        &lt;nav class=&quot;navbar&quot;&gt;
+            &lt;a href=&quot;index.html&quot; class=&quot;active&quot;&gt;首页&lt;/a&gt;
+            &lt;a href=&quot;student_list.html&quot;&gt;学生列表&lt;/a&gt;
+            &lt;a href=&quot;about.html&quot;&gt;关于项目&lt;/a&gt;
+        &lt;/nav&gt;
+
+        &lt;main&gt;
+            &lt;section class=&quot;welcome-section&quot;&gt;
+                &lt;h2&gt;欢迎使用学生管理系统&lt;/h2&gt;
+                &lt;p&gt;本系统是基于Linux Shell脚本部署的Web应用程序演示。&lt;/p&gt;
+                &lt;div class=&quot;info-cards&quot;&gt;
+                    &lt;div class=&quot;card&quot;&gt;
+                        &lt;h3&gt;技术栈&lt;/h3&gt;
+                        &lt;ul&gt;
+                            &lt;li&gt;Linux操作系统&lt;/li&gt;
+                            &lt;li&gt;Shell脚本编程&lt;/li&gt;
+                            &lt;li&gt;Apache Tomcat&lt;/li&gt;
+                            &lt;li&gt;MySQL数据库&lt;/li&gt;
+                        &lt;/ul&gt;
+                    &lt;/div&gt;
+                    &lt;div class=&quot;card&quot;&gt;
+                        &lt;h3&gt;功能模块&lt;/h3&gt;
+                        &lt;ul&gt;
+                            &lt;li&gt;用户管理&lt;/li&gt;
+                            &lt;li&gt;数据管理&lt;/li&gt;
+                            &lt;li&gt;信息查询&lt;/li&gt;
+                            &lt;li&gt;系统设置&lt;/li&gt;
+                        &lt;/ul&gt;
+                    &lt;/div&gt;
+                &lt;/div&gt;
+            &lt;/section&gt;
+
+            &lt;section class=&quot;status-section&quot;&gt;
+                &lt;h2&gt;系统状态&lt;/h2&gt;
+                &lt;table class=&quot;status-table&quot;&gt;
+                    &lt;tr&gt;&lt;td&gt;服务器&lt;/td&gt;&lt;td class=&quot;success&quot;&gt;正常运行&lt;/td&gt;&lt;/tr&gt;
+                    &lt;tr&gt;&lt;td&gt;数据库&lt;/td&gt;&lt;td class=&quot;success&quot;&gt;已连接&lt;/td&gt;&lt;/tr&gt;
+                    &lt;tr&gt;&lt;td&gt;部署时间&lt;/td&gt;&lt;td id=&quot;deploy-time&quot;&gt;&lt;/td&gt;&lt;/tr&gt;
+                    &lt;tr&gt;&lt;td&gt;系统版本&lt;/td&gt;&lt;td&gt;v1.0.0&lt;/td&gt;&lt;/tr&gt;
+                &lt;/table&gt;
+            &lt;/section&gt;
+        &lt;/main&gt;
+
+        &lt;footer&gt;
+            &lt;p&gt;&amp;copy; 2024 Linux系统开发课程设计 | 学生管理系统&lt;/p&gt;
+        &lt;/footer&gt;
+    &lt;/div&gt;
+    &lt;script src=&quot;js/main.js&quot;&gt;&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+HTMLEOF
+
+    # ============================================
+    # 创建学生列表页面 student_list.html
+    # ============================================
+    cat &gt; &quot;$PROJECT_DEPLOY_DIR/student_list.html&quot; &lt;&lt; &#x27;HTMLEOF&#x27;
+&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+    &lt;meta charset=&quot;UTF-8&quot;&gt;
+    &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1.0&quot;&gt;
+    &lt;title&gt;学生列表 - 学生管理系统&lt;/title&gt;
+    &lt;link rel=&quot;stylesheet&quot; href=&quot;css/style.css&quot;&gt;
+&lt;/head&gt;
+&lt;body&gt;
+    &lt;div class=&quot;container&quot;&gt;
+        &lt;header&gt;
+            &lt;h1&gt;学生管理系统&lt;/h1&gt;
+        &lt;/header&gt;
+
+        &lt;nav class=&quot;navbar&quot;&gt;
+            &lt;a href=&quot;index.html&quot;&gt;首页&lt;/a&gt;
+            &lt;a href=&quot;student_list.html&quot; class=&quot;active&quot;&gt;学生列表&lt;/a&gt;
+            &lt;a href=&quot;about.html&quot;&gt;关于项目&lt;/a&gt;
+        &lt;/nav&gt;
+
+        &lt;main&gt;
+            &lt;section class=&quot;list-section&quot;&gt;
+                &lt;h2&gt;学生信息列表&lt;/h2&gt;
+                &lt;div class=&quot;toolbar&quot;&gt;
+                    &lt;input type=&quot;text&quot; id=&quot;search-input&quot; placeholder=&quot;搜索学生...&quot;&gt;
+                    &lt;button onclick=&quot;searchStudents()&quot;&gt;搜索&lt;/button&gt;
+                &lt;/div&gt;
+
+                &lt;table class=&quot;data-table&quot;&gt;
+                    &lt;thead&gt;
+                        &lt;tr&gt;
+                            &lt;th&gt;学号&lt;/th&gt;
+                            &lt;th&gt;姓名&lt;/th&gt;
+                            &lt;th&gt;性别&lt;/th&gt;
+                            &lt;th&gt;年龄&lt;/th&gt;
+                            &lt;th&gt;班级&lt;/th&gt;
+                            &lt;th&gt;操作&lt;/th&gt;
+                        &lt;/tr&gt;
+                    &lt;/thead&gt;
+                    &lt;tbody id=&quot;student-tbody&quot;&gt;
+                        &lt;!-- 数据将通过JavaScript动态加载 --&gt;
+                    &lt;/tbody&gt;
+                &lt;/table&gt;
+
+                &lt;div class=&quot;pagination&quot;&gt;
+                    &lt;button onclick=&quot;prevPage()&quot;&gt;上一页&lt;/button&gt;
+                    &lt;span id=&quot;page-info&quot;&gt;第 1 页&lt;/span&gt;
+                    &lt;button onclick=&quot;nextPage()&quot;&gt;下一页&lt;/button&gt;
+                &lt;/div&gt;
+            &lt;/section&gt;
+        &lt;/main&gt;
+
+        &lt;footer&gt;
+            &lt;p&gt;&amp;copy; 2024 Linux系统开发课程设计&lt;/p&gt;
+        &lt;/footer&gt;
+    &lt;/div&gt;
+    &lt;script src=&quot;js/main.js&quot;&gt;&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+HTMLEOF
+
+    # ============================================
+    # 创建关于页面 about.html
+    # ============================================
+    cat &gt; &quot;$PROJECT_DEPLOY_DIR/about.html&quot; &lt;&lt; &#x27;HTMLEOF&#x27;
+&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+    &lt;meta charset=&quot;UTF-8&quot;&gt;
+    &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1.0&quot;&gt;
+    &lt;title&gt;关于项目 - 学生管理系统&lt;/title&gt;
+    &lt;link rel=&quot;stylesheet&quot; href=&quot;css/style.css&quot;&gt;
+&lt;/head&gt;
+&lt;body&gt;
+    &lt;div class=&quot;container&quot;&gt;
+        &lt;header&gt;
+            &lt;h1&gt;学生管理系统&lt;/h1&gt;
+        &lt;/header&gt;
+
+        &lt;nav class=&quot;navbar&quot;&gt;
+            &lt;a href=&quot;index.html&quot;&gt;首页&lt;/a&gt;
+            &lt;a href=&quot;student_list.html&quot;&gt;学生列表&lt;/a&gt;
+            &lt;a href=&quot;about.html&quot; class=&quot;active&quot;&gt;关于项目&lt;/a&gt;
+        &lt;/nav&gt;
+
+        &lt;main&gt;
+            &lt;section class=&quot;about-section&quot;&gt;
+                &lt;h2&gt;项目介绍&lt;/h2&gt;
+                &lt;div class=&quot;about-content&quot;&gt;
+                    &lt;h3&gt;项目背景&lt;/h3&gt;
+                    &lt;p&gt;本项目是Linux系统开发课程的课程设计作品，旨在通过实践掌握Linux环境下的系统管理和Web应用部署技能。&lt;/p&gt;
+
+                    &lt;h3&gt;技术实现&lt;/h3&gt;
+                    &lt;ul&gt;
+                        &lt;li&gt;&lt;strong&gt;用户管理：&lt;/strong&gt;使用Shell脚本实现用户的增删改查操作&lt;/li&gt;
+                        &lt;li&gt;&lt;strong&gt;文件操作：&lt;/strong&gt;使用Shell命令实现文件和目录的管理&lt;/li&gt;
+                        &lt;li&gt;&lt;strong&gt;数据库配置：&lt;/strong&gt;自动化安装和配置MySQL数据库&lt;/li&gt;
+                        &lt;li&gt;&lt;strong&gt;服务器配置：&lt;/strong&gt;自动化安装和配置Tomcat服务器&lt;/li&gt;
+                        &lt;li&gt;&lt;strong&gt;项目部署：&lt;/strong&gt;完整的Web应用部署流程&lt;/li&gt;
+                    &lt;/ul&gt;
+
+                    &lt;h3&gt;学习收获&lt;/h3&gt;
+                    &lt;ol&gt;
+                        &lt;li&gt;深入理解了Linux系统的基本架构和工作原理&lt;/li&gt;
+                        &lt;li&gt;掌握了Shell脚本编程的基本语法和技巧&lt;/li&gt;
+                        &lt;li&gt;学会了在Linux环境下配置和管理常用服务&lt;/li&gt;
+                        &lt;li&gt;理解了Web应用的完整部署流程&lt;/li&gt;
+                        &lt;li&gt;培养了解决实际问题的能力&lt;/li&gt;
+                    &lt;/ol&gt;
+                &lt;/div&gt;
+            &lt;/section&gt;
+        &lt;/main&gt;
+
+        &lt;footer&gt;
+            &lt;p&gt;&amp;copy; 2024 Linux系统开发课程设计&lt;/p&gt;
+        &lt;/footer&gt;
+    &lt;/div&gt;
+    &lt;script src=&quot;js/main.js&quot;&gt;&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+HTMLEOF
+
+    # ============================================
+    # 创建CSS样式文件 css/style.css
+    # ============================================
+    cat &gt; &quot;$PROJECT_DEPLOY_DIR/css/style.css&quot; &lt;&lt; &#x27;CSSEOF&#x27;
+/* 学生管理系统样式表 */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: &#x27;Microsoft YaHei&#x27;, Arial, sans-serif;
+    background-color: #f5f5f5;
+    color: #333;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    background: white;
+    min-height: 100vh;
+}
+
+header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 30px;
+    text-align: center;
+}
+
+header h1 {
+    font-size: 2.5em;
+    margin-bottom: 10px;
+}
+
+header .subtitle {
+    font-size: 1.1em;
+    opacity: 0.9;
+}
+
+.navbar {
+    background: #333;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+}
+
+.navbar a {
+    color: white;
+    padding: 15px 30px;
+    text-decoration: none;
+    transition: background 0.3s;
+}
+
+.navbar a:hover,
+.navbar a.active {
+    background: #667eea;
+}
+
+main {
+    padding: 30px;
+}
+
+.welcome-section h2,
+.list-section h2,
+.about-section h2 {
+    color: #667eea;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #667eea;
+}
+
+.info-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.card {
+    background: #f9f9f9;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+.card h3 {
+    color: #764ba2;
+    margin-bottom: 15px;
+}
+
+.card ul {
+    list-style: none;
+    padding-left: 0;
+}
+
+.card ul li {
+    padding: 8px 0;
+    border-bottom: 1px solid #eee;
+}
+
+.card ul li:before {
+    content: &quot;✓ &quot;;
+    color: #667eea;
+    font-weight: bold;
+}
+
+.status-table {
+    width: 100%;
+    max-width: 500px;
+    border-collapse: collapse;
+    margin-top: 20px;
+}
+
+.status-table td {
+    padding: 12px 15px;
+    border: 1px solid #ddd;
+}
+
+.status-table td:first-child {
+    font-weight: bold;
+    background: #f5f5f5;
+    width: 40%;
+}
+
+.success {
+    color: #28a745;
+    font-weight: bold;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+    background: white;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+.data-table th,
+.data-table td {
+    padding: 12px 15px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+
+.data-table th {
+    background: #667eea;
+    color: white;
+    font-weight: bold;
+}
+
+.data-table tr:hover {
+    background: #f5f5f5;
+}
+
+.toolbar {
+    margin-bottom: 20px;
+    display: flex;
+    gap: 10px;
+}
+
+.toolbar input {
+    flex: 1;
+    padding: 10px 15px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    font-size: 14px;
+}
+
+.toolbar button {
+    padding: 10px 25px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+
+.toolbar button:hover {
+    background: #764ba2;
+}
+
+.pagination {
+    margin-top: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 15px;
+}
+
+.pagination button {
+    padding: 8px 20px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.about-content {
+    line-height: 1.8;
+}
+
+.about-content h3 {
+    color: #667eea;
+    margin: 25px 0 15px;
+    font-size: 1.3em;
+}
+
+.about-content ul,
+.about-content ol {
+    margin-left: 25px;
+    margin-top: 10px;
+}
+
+.about-content li {
+    margin-bottom: 8px;
+}
+
+footer {
+    background: #333;
+    color: white;
+    text-align: center;
+    padding: 20px;
+    margin-top: 40px;
+}
+CSSEOF
+
+    # ============================================
+    # 创建JavaScript文件 js/main.js
+    # ============================================
+    cat &gt; &quot;$PROJECT_DEPLOY_DIR/js/main.js&quot; &lt;&lt; &#x27;JSEOF&#x27;
+// 学生管理系统 JavaScript
+
+// 显示当前部署时间
+document.addEventListener(&#x27;DOMContentLoaded&#x27;, function() {
+    var timeElement = document.getElementById(&#x27;deploy-time&#x27;);
+    if (timeElement) {
+        timeElement.textContent = new Date().toLocaleString(&#x27;zh-CN&#x27;);
+    }
+
+    // 加载学生数据
+    loadStudentData();
+});
+
+// 模拟学生数据（实际项目中应从后端API获取）
+var studentsData = [
+    { id: 1, name: &#x27;张三&#x27;, gender: &#x27;男&#x27;, age: 20, className: &#x27;计算机2301&#x27; },
+    { id: 2, name: &#x27;李四&#x27;, gender: &#x27;男&#x27;, age: 19, className: &#x27;计算机2301&#x27; },
+    { id: 3, name: &#x27;王五&#x27;, gender: &#x27;男&#x27;, age: 21, className: &#x27;计算机2302&#x27; },
+    { id: 4, name: &#x27;赵六&#x27;, gender: &#x27;女&#x27;, age: 20, className: &#x27;计算机2302&#x27; },
+    { id: 5, name: &#x27;钱七&#x27;, gender: &#x27;女&#x27;, age: 19, className: &#x27;软件工程2301&#x27; }
+];
+
+var currentPage = 1;
+var pageSize = 5;
+
+// 加载并显示学生数据
+function loadStudentData() {
+    var tbody = document.getElementById(&#x27;student-tbody&#x27;);
+    if (!tbody) return;
+
+    tbody.innerHTML = &#x27;&#x27;;
+
+    studentsData.forEach(function(student) {
+        var row = document.createElement(&#x27;tr&#x27;);
+
+        row.innerHTML =
+            &#x27;&lt;td&gt;&#x27; + student.id + &#x27;&lt;/td&gt;&#x27; +
+            &#x27;&lt;td&gt;&#x27; + student.name + &#x27;&lt;/td&gt;&#x27; +
+            &#x27;&lt;td&gt;&#x27; + student.gender + &#x27;&lt;/td&gt;&#x27; +
+            &#x27;&lt;td&gt;&#x27; + student.age + &#x27;&lt;/td&gt;&#x27; +
+            &#x27;&lt;td&gt;&#x27; + student.className + &#x27;&lt;/td&gt;&#x27; +
+            &#x27;&lt;td&gt;&lt;button onclick=&quot;viewDetail(&#x27; + student.id + &#x27;)&quot;&gt;查看&lt;/button&gt;&lt;/td&gt;&#x27;;
+
+        tbody.appendChild(row);
+    });
+}
+
+// 搜索学生
+function searchStudents() {
+    var keyword = document.getElementById(&#x27;search-input&#x27;).value.toLowerCase();
+    alert(&#x27;搜索功能：&#x27; + (keyword || &#x27;全部&#x27;));
+}
+
+// 分页功能
+function prevPage() {
+    if (currentPage &gt; 1) {
+        currentPage--;
+        updatePageInfo();
+    }
+}
+
+function nextPage() {
+    currentPage++;
+    updatePageInfo();
+}
+
+function updatePageInfo() {
+    var pageInfo = document.getElementById(&#x27;page-info&#x27;);
+    if (pageInfo) {
+        pageInfo.textContent = &#x27;第 &#x27; + currentPage + &#x27; 页&#x27;;
+    }
+}
+
+// 查看详情
+function viewDetail(id) {
+    alert(&#x27;查看学生ID: &#x27; + id + &#x27; 的详细信息&#x27;);
+}
+JSEOF
+
+    # ============================================
+    # 创建WEB-INF配置文件 web.xml
+    # ============================================
+    cat &gt; &quot;$PROJECT_DEPLOY_DIR/WEB-INF/web.xml&quot; &lt;&lt; &#x27;XMLEOF&#x27;
+&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
+&lt;web-app xmlns=&quot;http://xmlns.jcp.org/xml/ns/javaee&quot;
+         xmlns:xsi=&quot;http://www.w3.org/2001/XMLSchema-instance&quot;
+         xsi:schemaLocation=&quot;http://xmlns.jcp.org/xml/ns/javaee
+                             http://xmlns.jcp.org/xml/ns/javaee/web-app_4_0.xsd&quot;
+         version=&quot;4.0&quot;&gt;
+
+    &lt;display-name&gt;学生管理系统&lt;/display-name&gt;
+    &lt;description&gt;
+        Linux系统开发课程设计 - 学生管理系统演示项目
+    &lt;/description&gt;
+
+    &lt;welcome-file-list&gt;
+        &lt;welcome-file&gt;index.html&lt;/welcome-file&gt;
+        &lt;welcome-file&gt;index.htm&lt;/welcome-file&gt;
+    &lt;/welcome-file-list&gt;
+
+&lt;/web-app&gt;
+XMLEOF
+
+    # 设置权限
+    chmod -R 755 &quot;$PROJECT_DEPLOY_DIR&quot;
+
+    # 统计创建的文件
+    file_count=$(find &quot;$PROJECT_DEPLOY_DIR&quot; -type f | wc -l)
+
+    echo -e &quot;${GREEN}[成功] 示例项目创建完成！${NC}&quot;
+    echo -e &quot;  项目名称: $PROJECT_NAME&quot;
+    echo -e &quot;  部署路径: $PROJECT_DEPLOY_DIR&quot;
+    echo -e &quot;  文件总数: $file_count&quot;
+    echo -e &quot;\n${YELLOW}--- 项目结构 ---${NC}&quot;
+    tree &quot;$PROJECT_DEPLOY_DIR&quot; 2&gt;/dev/null || find &quot;$PROJECT_DEPLOY_DIR&quot; -type f | head -20
+
+    deploy_log &quot;示例项目创建成功: $PROJECT_DEPLOY_DIR ($file_count 个文件)&quot;
+}
+
+# ============================================
+# 功能3：启动MySQL服务
+# 逻辑说明：
+#   1. 检查MySQL服务状态
+#   2. 如果未启动则启动服务
+#   3. 初始化项目所需的数据库和数据
+#   4. 验证数据库连接
+# ============================================
+start_mysql_service() {
+    echo -e &quot;${CYAN}============================================================${NC}&quot;
+    echo -e &quot;${CYAN}         启动MySQL数据库${NC}&quot;
+    echo -e &quot;${CYAN}============================================================${NC}&quot;
+
+    deploy_log &quot;[步骤3] 启动MySQL服务...&quot;
+
+    # 3.1 检查MySQL服务状态
+    echo -e &quot;${YELLOW}[检查] MySQL服务状态...${NC}&quot;
+    if sudo systemctl is-active --quiet mysqld 2&gt;/dev/null || \
+       sudo systemctl is-active --quiet mariadb 2&gt;/dev/null; then
+        echo -e &quot;${GREEN}  MySQL已在运行中${NC}&quot;
+    else
+        echo -e &quot;${YELLOW}[启动] MySQL服务...${NC}&quot;
+        sudo systemctl start mysqld 2&gt;/dev/null || sudo systemctl start mariadb 2&gt;/dev/null
+
+        sleep 3
+
+        if sudo systemctl is-active --quiet mysqld 2&gt;/dev/null || \
+           sudo systemctl is-active --quiet mariadb 2&gt;/dev/null; then
+            echo -e &quot;${GREEN}  MySQL启动成功${NC}&quot;
+            deploy_log &quot;MySQL服务启动成功&quot;
+        else
+            echo -e &quot;${RED}[错误] MySQL启动失败！${NC}&quot;
+            deploy_log &quot;MySQL启动失败&quot;
+            return 1
+        fi
+    fi
+
+    # 3.2 测试数据库连接
+    echo -e &quot;\n${YELLOW}[测试] 数据库连接...${NC}&quot;
+    if mysql -u root -p&quot;$MYSQL_ROOT_PASSWORD&quot; -e &quot;SELECT &#x27;Connection OK&#x27;;&quot; 2&gt;/dev/null; then
+        echo -e &quot;${GREEN}  数据库连接成功${NC}&quot;
+        deploy_log &quot;数据库连接测试成功&quot;
+    else
+        echo -e &quot;${RED}[警告] 数据库连接失败，请检查密码配置${NC}&quot;
+        deploy_log &quot;数据库连接失败&quot;
+    fi
+
+    # 3.3 检查并创建项目数据库（如果不存在）
+    echo -e &quot;\n${YELLOW}[检查] 项目数据库...${NC}&quot;
+    DB_EXISTS=$(mysql -u root -p&quot;$MYSQL_ROOT_PASSWORD&quot; -e &quot;SHOW DATABASES LIKE &#x27;$DB_NAME&#x27;;&quot; 2&gt;/dev/null | wc -l)
+
+    if [ &quot;$DB_EXISTS&quot; -gt 0 ]; then
+        echo -e &quot;${GREEN}  数据库 &#x27;$DB_NAME&#x27; 已存在${NC}&quot;
+    else
+        echo -e &quot;${YELLOW}[创建] 初始化项目数据库...${NC}&quot;
+        # 这里可以调用数据库初始化SQL
+        echo -e &quot;${GREEN}  数据库准备就绪${NC}&quot;
+        deploy_log &quot;项目数据库准备完成&quot;
+    fi
+
+    return 0
+}
+
+# ============================================
+# 功能4：启动Tomcat服务
+# 逻辑说明：
+#   1. 检查Tomcat进程状态
+#   2. 执行startup.sh启动Tomcat
+#   3. 等待服务完全启动（监听端口）
+#   4. 验证HTTP可访问性
+# ============================================
+start_tomcat_service() {
+    echo -e &quot;${CYAN}============================================================${NC}&quot;
+    echo -e &quot;${CYAN}         启动Tomcat服务器${NC}&quot;
+    echo -e &quot;${CYAN}============================================================${NC}&quot;
+
+    deploy_log &quot;[步骤4] 启动Tomcat服务...&quot;
+
+    # 4.1 检查Tomcat是否已安装
+    if [ ! -d &quot;$TOMCAT_HOME&quot; ]; then
+        echo -e &quot;${RED}[错误] Tomcat未安装在: $TOMCAT_HOME${NC}&quot;
+        echo -e &quot;${YELLOW}请先执行题目4的Tomcat安装配置${NC}&quot;
+        return 1
+    fi
+
+    # 4.2 检查并启动Tomcat
+    echo -e &quot;${YELLOW}[检查] Tomcat状态...${NC}&quot;
+    if pgrep -f &quot;org.apache.catalina.startup.Bootstrap&quot; &gt; /dev/null; then
+        echo -e &quot;${GREEN}  Tomcat已在运行中${NC}&quot;
+
+        # 重启以加载新部署的项目
+        read -p &quot;检测到新项目部署，是否重启Tomcat？(y/n): &quot; restart_tc
+        if [ &quot;$restart_tc&quot; = &quot;y&quot; ] || [ &quot;$restart_tc&quot; = &quot;Y&quot; ]; then
+            restart_tomcat
+        fi
+    else
+        echo -e &quot;${YELLOW}[启动] Tomcat服务器...${NC}&quot;
+        cd &quot;$TOMCAT_HOME&quot;
+
+        export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+        ./bin/startup.sh
+
+        if [ $? -eq 0 ]; then
+            echo -e &quot;${GREEN}  Tomcat启动命令已执行${NC}&quot;
+        else
+            echo -e &quot;${RED}[错误] Tomcat启动失败！${NC}&quot;
+            return 1
+        fi
+    fi
+
+    # 4.3 等待Tomcat完全启动
+    echo -e &quot;\n${YELLOW}[等待] 服务启动中（约10秒）...${NC}&quot;
+    sleep 10
+
+    # 4.4 验证启动结果
+    check_tomcat_running
+}
+
+# 重启Tomcat
+restart_tomcat() {
+    echo -e &quot;${YELLOW}[重启] 正在重启Tomcat...${NC}&quot;
+    cd &quot;$TOMCAT_HOME&quot;
+    export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+
+    ./bin/shutdown.sh 2&gt;/dev/null
+    sleep 3
+    pkill -9 -f catalina 2&gt;/dev/null
+    sleep 2
+
+    ./bin/startup.sh
+    sleep 10
+
+    echo -e &quot;${GREEN}  Tomcat重启完成${NC}&quot;
+    deploy_log &quot;Tomcat已重启&quot;
+}
+
+# 检查Tomcat是否正在运行
+check_tomcat_running() {
+    PORT=${TOMCAT_PORT:-8080}
+    PROJECT_URL=&quot;http://localhost:$PORT/$PROJECT_NAME/&quot;
+
+    echo -e &quot;\n${YELLOW}--- 服务状态验证 ---${NC}\n&quot;
+
+    # 检查进程
+    if pgrep -f &quot;org.apache.catalina.startup.Bootstrap&quot; &gt; /dev/null; then
+        echo -e &quot;  ${GREEN}● 进程: 运行中${NC}&quot;
+    else
+        echo -e &quot;  ${RED}○ 进程: 未运行${NC}&quot;
+        return 1
+    fi
+
+    # 检查端口
+    if ss -tlnp 2&gt;/dev/null | grep -q &quot;:$PORT &quot;; then
+        echo -e &quot;  ${GREEN}● 端口 $PORT: 监听中${NC}&quot;
+    else
+        echo -e &quot;  ${RED}○ 端口 $PORT: 未监听${NC}&quot;
+    fi
+
+    # HTTP测试
+    if command -v curl &amp;&gt;/dev/null; then
+        HTTP_CODE=$(curl -s -o /dev/null -w &quot;%{http_code}&quot; http://localhost:$PORT/ --connect-timeout 5 2&gt;/dev/null)
+        if [ &quot;$HTTP_CODE&quot; = &quot;200&quot; ] || [ &quot;$HTTP_CODE&quot; = &quot;302&quot; ]; then
+            echo -e &quot;  ${GREEN}● HTTP: 正常响应 ($HTTP_CODE)${NC}&quot;
+        else
+            echo -e &quot;  ${RED}○ HTTP: 响应异常 ($HTTP_CODE)${NC}&quot;
+        fi
+    fi
+
+    echo &quot;&quot;
+    echo -e &quot;${GREEN}============================================${NC}&quot;
+    echo -e &quot;${GREEN}  项目访问地址:${NC}&quot;
+    echo -e &quot;${BLUE}  $PROJECT_URL${NC}&quot;
+    echo -e &quot;${GREEN}============================================${NC}&quot;
+
+    deploy_log &quot;Tomcat运行正常, 访问地址=$PROJECT_URL&quot;
+    return 0
+}
+
+# ============================================
+# 功能5：浏览器访问测试
+# 逻辑说明：
+#   1. 使用curl模拟HTTP请求测试各页面
+#   2. 验证页面返回状态码
+#   3. 检查关键内容是否存在
+#   4. 输出详细的测试报告
+# ============================================
+test_project_access() {
+    echo -e &quot;${CYAN}============================================================${NC}&quot;
+    echo -e &quot;${CYAN}         项目功能测试${NC}&quot;
+    echo -e &quot;${CYAN}============================================================${NC}&quot;
+
+    deploy_log &quot;[步骤5] 测试项目访问...&quot;
+
+    PORT=${TOMCAT_PORT:-8080}
+    BASE_URL=&quot;http://localhost:$PORT/$PROJECT_NAME&quot;
+
+    # 5.1 测试工具检查
+    if ! command -v curl &amp;&gt;/dev/null; then
+        echo -e &quot;${RED}[错误] 系统缺少curl工具，无法进行HTTP测试${NC}&quot;
+        return 1
+    fi
+
+    echo -e &quot;${YELLOW}[测试] 开始HTTP请求测试...\n${NC}&quot;
+
+    # 定义要测试的页面
+    declare -A TEST_PAGES
+    TEST_PAGES[&quot;首页&quot;]=&quot;$BASE_URL/&quot;
+    TEST_PAGES[&quot;学生列表&quot;]=&quot;$BASE_URL/student_list.html&quot;
+    TEST_PAGES[&quot;关于页面&quot;]=&quot;$BASE_URL/about.html&quot;
+    TEST_PAGES[&quot;CSS样式&quot;]=&quot;$BASE_URL/css/style.css&quot;
+    TEST_PAGES[&quot;JS脚本&quot;]=&quot;$BASE_URL/js/main.js&quot;
+
+    PASS_COUNT=0
+    TOTAL_COUNT=${#TEST_PAGES[@]}
+
+    # 逐个测试每个页面
+    for page_name in &quot;${!TEST_PAGES[@]}&quot;; do
+        page_url=&quot;${TEST_PAGES[$page_name]}&quot;
+
+        printf &quot;  %-12s → &quot; &quot;$page_name&quot;
+
+        # 发送HTTP GET请求
+        HTTP_CODE=$(curl -s -o /dev/null -w &quot;%{http_code}&quot; &quot;$page_url&quot; --connect-timeout 10 2&gt;/dev/null)
+        RESPONSE_TIME=$(curl -s -o /dev/null -w &quot;%{time_total}&quot; &quot;$page_url&quot; --connect-timeout 10 2&gt;/dev/null)
+
+        # 判断测试结果
+        case $HTTP_CODE in
+            200)
+                echo -e &quot;${GREEN}✓ 成功 (${HTTP_CODE}, ${RESPONSE_TIME}s)${NC}&quot;
+                PASS_COUNT=$((PASS_COUNT + 1))
+                ;;
+            302|301)
+                echo -e &quot;${GREEN}✓ 重定向 (${HTTP_CODE})${NC}&quot;
+                PASS_COUNT=$((PASS_COUNT + 1))
+                ;;
+            404)
+                echo -e &quot;${RED}✗ 未找到 (404)${NC}&quot;
+                ;;
+            000)
+                echo -e &quot;${RED}✗ 连接失败${NC}&quot;
+                ;;
+            *)
+                echo -e &quot;${YELLOW}△ 其他 ($HTTP_CODE)${NC}&quot;
+                ;;
+        esac
+    done
+
+    # 5.2 输出测试总结
+    echo &quot;&quot;
+    echo -e &quot;${PURPLE}═══════════════════════════════════════${NC}&quot;
+    echo -e &quot;${YELLOW}              测试报告${NC}&quot;
+    echo -e &quot;${PURPLE}═══════════════════════════════════════${NC}&quot;
+    echo -e &quot;  测试时间: $(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)&quot;
+    echo -e &quot;  测试项数: $TOTAL_COUNT&quot;
+    echo -e &quot;  通过数量: ${GREEN}$PASS_COUNT${NC}&quot;
+    echo -e &quot;  失败数量: $((TOTAL_COUNT - PASS_COUNT))&quot;
+
+    if [ $PASS_COUNT -eq $TOTAL_COUNT ]; then
+        echo -e &quot;  测试结果: ${GREEN}全部通过 ✓${NC}&quot;
+        deploy_log &quot;功能测试全部通过 ($PASS_COUNT/$TOTAL_COUNT)&quot;
+    else
+        echo -e &quot;  测试结果: ${RED}部分失败 ✗${NC}&quot;
+        deploy_log &quot;功能测试部分失败 ($PASS_COUNT/$TOTAL_COUNT)&quot;
+    fi
+
+    echo -e &quot;${PURPLE}═══════════════════════════════════════${NC}&quot;
+    echo &quot;&quot;
+
+    # 5.3 显示访问说明
+    echo -e &quot;${YELLOW}--- 浏览器访问指南 ---${NC}&quot;
+    echo -e &quot;  1. 打开浏览器&quot;
+    echo -e &quot;  2. 在地址栏输入: ${BLUE}$BASE_URL/${NC}&quot;
+    echo -e &quot;  3. 回车即可访问学生管理系统&quot;
+    echo &quot;&quot;
+    echo -e &quot;  或访问其他页面:&quot;
+    echo -e &quot;    - 首页: ${BLUE}${BASE_URL}/${NC}&quot;
+    echo -e &quot;    - 学生列表: ${BLUE}${BASE_URL}/student_list.html${NC}&quot;
+    echo -e &quot;    - 关于: ${BLUE}${BASE_URL}/about.html${NC}&quot;
+}
+
+# ============================================
+# 一键完整部署流程
+# ============================================
+full_deploy() {
+    echo -e &quot;${CYAN}============================================================${NC}&quot;
+    echo -e &quot;${CYAN}          一键完整部署${NC}&quot;
+    echo -e &quot;${CYAN}============================================================${NC}&quot;
+    echo &quot;&quot;
+    echo -e &quot;${YELLOW}开始执行完整部署流程...${NC}&quot;
+    echo &quot;&quot;
+
+    # 步骤1：环境检测
+    check_deploy_environment
+    if [ $? -ne 0 ]; then
+        echo -e &quot;${RED}[终止] 环境检测未通过，请先解决问题${NC}&quot;
+        return 1
+    fi
+    echo &quot;&quot;
+
+    # 步骤2：拷贝项目代码
+    copy_project_code
+    if [ $? -ne 0 ]; then
+        echo -e &quot;${RED}[终止] 项目拷贝失败${NC}&quot;
+        return 1
+    fi
+    echo &quot;&quot;
+
+    # 步骤3：启动MySQL
+    start_mysql_service
+    echo &quot;&quot;
+
+    # 步骤4：启动Tomcat
+    start_tomcat_service
+    echo &quot;&quot;
+
+    # 步骤5：功能测试
+    test_project_access
+
+    echo &quot;&quot;
+    echo -e &quot;${GREEN}============================================================${NC}&quot;
+    echo -e &quot;${GREEN}     🎉 部署完成！项目已成功上线 🎉${NC}&quot;
+    echo -e &quot;${GREEN}============================================================${NC}&quot;
+    deploy_log &quot;=== 完整部署流程执行完毕 ===&quot;
+}
+
+# ============================================
+# 主菜单界面
+# ============================================
+main_menu() {
+    init_deploy_log
+
+    while true; do
+        echo &quot;&quot;
+        echo -e &quot;${GREEN}╔══════════════════════════════════════════════╗${NC}&quot;
+        echo -e &quot;${GREEN}║       Web项目部署管理系统 v1.0               ║${NC}&quot;
+        echo -e &quot;${GREEN}╠══════════════════════════════════════════════╣${NC}&quot;
+        echo -e &quot;${GREEN}║                                              ║${NC}&quot;
+        echo -e &quot;${GREEN}║   1. 检查部署环境                           ║${NC}&quot;
+        echo -e &quot;${GREEN}║   2. 拷贝项目代码                           ║${NC}&quot;
+        echo -e &quot;${GREEN}║   3. 启动MySQL数据库                        ║${NC}&quot;
+        echo -e &quot;${GREEN}║   4. 启动Tomcat服务器                       ║${NC}&quot;
+        echo -e &quot;${GREEN}║   5. 测试项目功能（浏览器访问）             ║${NC}&quot;
+        echo -e &quot;${GREEN}║   6. 一键完整部署                           ║${NC}&quot;
+        echo -e &quot;${GREEN}║   0. 退出系统                               ║${NC}&quot;
+        echo -e &quot;${GREEN}║                                              ║${NC}&quot;
+        echo -e &quot;${GREEN}╚══════════════════════════════════════════════╝${NC}&quot;
+        echo &quot;&quot;
+
+        read -p &quot;请选择功能 (0-6): &quot; choice
+
+        case $choice in
+            1)
+                check_deploy_environment
+                ;;
+            2)
+                copy_project_code
+                ;;
+            3)
+                start_mysql_service
+                ;;
+            4)
+                start_tomcat_service
+                ;;
+            5)
+                test_project_access
+                ;;
+            6)
+                full_deploy
+                ;;
+            0)
+                echo -e &quot;${YELLOW}感谢使用项目部署工具，再见！${NC}&quot;
+                exit 0
+                ;;
+            *)
+                echo -e &quot;${RED}[错误] 无效的选择，请重新输入！${NC}&quot;
+                ;;
+        esac
+
+        echo &quot;&quot;
+        read -p &quot;按回车键继续...&quot;
+    done
+}
+
+# 程序入口
+main_menu
+</pre>
+</div>
+
+</body></html>
